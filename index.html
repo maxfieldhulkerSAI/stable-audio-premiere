@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Stable Audio</title>
+  <style>
+    /* UXP layout notes: every element is flex by default and display:block is
+       unreliable, so every container declares flex-direction explicitly.
+       <details> is not supported, so Settings is toggled from JS. */
+    body {
+      margin: 0;
+      padding: 10px 12px;
+      font-family: -apple-system, "Segoe UI", sans-serif;
+      font-size: 12px;
+      color: #e6e6e6;
+      background-color: #232323;
+      display: flex;
+      flex-direction: column;
+    }
+    .panel {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      max-width: 400px;
+    }
+    .row {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 8px;
+    }
+    .label {
+      color: #b8b8b8;
+      margin-bottom: 3px;
+    }
+    .inline {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .inline > * { margin-right: 8px; }
+    .inline > *:last-child { margin-right: 0; }
+    .header {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    h1 { font-size: 14px; font-weight: 600; margin: 0; }
+    input, textarea, select {
+      box-sizing: border-box;
+      padding: 5px 7px;
+      border: 1px solid #4a4a4a;
+      border-radius: 4px;
+      background-color: #1b1b1b;
+      color: #e6e6e6;
+      font-size: 12px;
+    }
+    .full { width: 100%; }
+    .num { width: 72px; }
+    .pick { width: 110px; }
+    textarea { min-height: 60px; width: 100%; }
+    input[type="checkbox"] { margin: 0 4px 0 0; }
+    input[type="range"] { width: 100%; }
+    button {
+      padding: 5px 10px;
+      border: 1px solid #5a5a5a;
+      border-radius: 4px;
+      background-color: #3a3a3a;
+      color: #e6e6e6;
+      font-size: 12px;
+    }
+    button.primary { background-color: #7c4dff; border-color: #7c4dff; color: #fff; font-weight: 600; }
+    button:disabled { opacity: 0.5; }
+    button.small { padding: 3px 8px; font-size: 11px; }
+    button.link { background-color: transparent; border-color: transparent; color: #b8b8b8; padding: 2px 0; }
+    .hint { color: #8a8a8a; font-size: 11px; margin-top: 3px; }
+    .status {
+      padding: 6px 8px;
+      border-radius: 4px;
+      background-color: #1b1b1b;
+      min-height: 14px;
+    }
+    .status.error { color: #ff7b7b; }
+    .status.ok { color: #9ee493; }
+    .take {
+      display: flex;
+      flex-direction: column;
+      padding: 6px 8px;
+      margin-bottom: 6px;
+      border: 1px solid #3a3a3a;
+      border-radius: 4px;
+      background-color: #1f1f1f;
+    }
+    .take .name { font-weight: 600; margin-bottom: 2px; }
+    .take .meta { color: #8a8a8a; font-size: 11px; margin-bottom: 5px; }
+    .hidden { display: none; }
+    .credits { color: #8a8a8a; font-size: 11px; }
+    .box {
+      display: flex;
+      flex-direction: column;
+      padding: 8px;
+      margin-bottom: 8px;
+      border: 1px solid #3a3a3a;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <div class="header">
+      <h1>Stable Audio</h1>
+      <div class="inline">
+        <span id="credits" class="credits"></span>
+        <button id="toggleSettings" class="link">Settings</button>
+      </div>
+    </div>
+
+    <div id="settings" class="box hidden">
+      <div class="row">
+        <span class="label">Stability API key</span>
+        <input id="apiKey" class="full" type="password" placeholder="sk-..." />
+        <span class="hint">Stored in UXP secure storage on this machine.</span>
+      </div>
+      <div class="row">
+        <span class="label">Model</span>
+        <select id="model" class="full">
+          <option value="stable-audio-3" selected>Stable Audio 3.0 (8 credits per take)</option>
+          <option value="stable-audio-2.5">Stable Audio 2.5</option>
+          <option value="stable-audio-2">Stable Audio 2.0</option>
+        </select>
+      </div>
+      <div class="row">
+        <span class="label">Output format</span>
+        <select id="outputFormat" class="full">
+          <option value="wav" selected>WAV</option>
+          <option value="mp3">MP3</option>
+        </select>
+      </div>
+      <div class="row inline">
+        <button id="saveSettings" class="small">Save settings</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="label">Mode</span>
+      <select id="mode" class="full">
+        <option value="text-to-audio" selected>Text to audio</option>
+        <option value="audio-to-audio">Audio to audio (restyle a reference)</option>
+        <option value="inpaint">Inpaint (regenerate a section of a file)</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <span class="label">Prompt</span>
+      <textarea id="prompt" placeholder="Warm analog synth bed, slow build, 90 BPM, cinematic, no drums"></textarea>
+    </div>
+
+    <div id="a2aBlock" class="hidden">
+      <div class="row">
+        <span class="label">Reference audio</span>
+        <div class="inline">
+          <button id="pickAudio" class="small">Choose file</button>
+          <span id="audioName" class="hint">No file chosen</span>
+        </div>
+        <span class="hint">mp3 or wav, 6 s to the model's max length.</span>
+      </div>
+      <div id="strengthBlock" class="row">
+        <span class="label">Strength <span id="strengthValue">0.70</span></span>
+        <input id="strength" type="range" min="0" max="1" step="0.05" value="0.7" />
+        <span class="hint">0 keeps the reference as is, 1 ignores it. Start around 0.7.</span>
+      </div>
+      <div id="maskBlock" class="row hidden">
+        <span class="label">Section to regenerate (seconds)</span>
+        <div class="inline">
+          <input id="maskStart" class="num" type="number" min="0" step="0.1" value="10" />
+          <span>to</span>
+          <input id="maskEnd" class="num" type="number" min="0" step="0.1" value="20" />
+        </div>
+        <span class="hint">To extend a file, set start to its current length and Duration to the new total.</span>
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="label">Duration (seconds)</span>
+      <div class="inline">
+        <input id="duration" class="num" type="number" min="1" max="380" step="1" value="30" />
+        <button id="useSelection" class="small">Use in/out</button>
+        <button id="useClip" class="small">Use selected clip</button>
+      </div>
+      <span class="hint" id="durationHint">Max 380 s per request on stable-audio-3.</span>
+    </div>
+
+    <div class="row inline">
+      <span class="label" style="margin: 0;">Takes</span>
+      <select id="takes" style="width: 56px;">
+        <option value="1">1</option>
+        <option value="2" selected>2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+      </select>
+      <input id="loop" type="checkbox" />
+      <span>Seamless loop</span>
+      <span id="cost" class="credits">16 credits</span>
+    </div>
+
+    <div class="row inline">
+      <button id="generate" class="primary">Generate</button>
+      <span class="label" style="margin: 0;">Place at</span>
+      <select id="placeTarget" class="pick">
+        <option value="in" selected>In point</option>
+        <option value="playhead">Playhead</option>
+      </select>
+      <input id="autoPlace" type="checkbox" />
+      <span>Auto-place first take</span>
+    </div>
+
+    <div class="row">
+      <div id="status" class="status">Ready.</div>
+    </div>
+
+    <div class="row">
+      <span class="label">Takes (in the "Stable Audio" bin, audition in the Source monitor)</span>
+      <div id="takesList" style="display: flex; flex-direction: column;"></div>
+    </div>
+  </div>
+
+  <script src="index.js"></script>
+</body>
+</html>
