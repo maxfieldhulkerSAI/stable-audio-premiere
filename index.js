@@ -181,7 +181,7 @@ function apiKey() {
 
 function setPreset(path) {
   state.presetPath = path || "";
-  el.presetName.textContent = path ? path.split(/[\\/]/).pop() : "None. Selected ranges will be cut from the clip's WAV media instead.";
+  el.presetName.textContent = path ? path.split(/[\\/]/).pop() : "None";
 }
 
 async function pickPreset() {
@@ -825,17 +825,17 @@ function renderTakes() {
 
       const placeIn = document.createElement("button");
       placeIn.className = "small";
-      placeIn.textContent = "Place at in point";
+      placeIn.textContent = "In point";
       placeIn.onclick = () => onPlace(take, "in");
 
       const placeHead = document.createElement("button");
       placeHead.className = "small";
-      placeHead.textContent = "Place at playhead";
+      placeHead.textContent = "Playhead";
       placeHead.onclick = () => onPlace(take, "playhead");
 
       const reveal = document.createElement("button");
       reveal.className = "small";
-      reveal.textContent = "Copy path";
+      reveal.textContent = "Path";
       reveal.onclick = () => {
         try {
           navigator.clipboard.writeText(take.nativePath);
@@ -903,7 +903,7 @@ function updateCost() {
   const count = Number(el.takes.value) || 1;
   el.cost.textContent = count * fam.creditsPerTake + " credits";
   el.duration.max = fam.maxDuration;
-  el.durationHint.textContent = "Max " + fam.maxDuration + " s per request on " + el.model.value + ".";
+  el.durationHint.textContent = "max " + fam.maxDuration;
 }
 
 async function onGenerate() {
@@ -1022,8 +1022,8 @@ function onModeChange() {
   const mode = el.mode.value;
   const needsAudio = mode === "audio-to-audio" || mode === "inpaint";
   el.a2aBlock.className = needsAudio ? "card" : "card hidden";
-  el.strengthBlock.className = mode === "audio-to-audio" ? "row" : "row hidden";
-  el.maskBlock.className = mode === "inpaint" ? "row" : "row hidden";
+  el.strengthBlock.className = mode === "audio-to-audio" ? "field" : "field hidden";
+  el.maskBlock.className = mode === "inpaint" ? "stack" : "stack hidden";
   const buttons = el.modeSeg.querySelectorAll("button");
   for (let i = 0; i < buttons.length; i++) {
     buttons[i].className = buttons[i].getAttribute("data-mode") === mode ? "active" : "";
