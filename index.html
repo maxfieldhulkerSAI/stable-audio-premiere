@@ -4,120 +4,117 @@
   <meta charset="utf-8" />
   <title>Stable Audio</title>
   <style>
-    /* UXP layout notes: every element is flex by default and display:block is
-       unreliable, so every container declares flex-direction explicitly.
-       <details> is not supported, so Settings is toggled from JS. */
+    /* Stability AI brand tokens. UXP notes: every element is flex by default and
+       display:block is unreliable, so every container declares its direction. */
     body {
       margin: 0;
-      padding: 10px 12px;
-      font-family: -apple-system, "Segoe UI", sans-serif;
-      font-size: 12px;
-      color: #e6e6e6;
-      background-color: #232323;
+      padding: 12px 14px 16px;
+      font-family: "Archivo", "Inter", -apple-system, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.4;
+      color: #EEEEEE;               /* Canvas White */
+      background-color: #1E1E1E;    /* Studio Black */
       display: flex;
       flex-direction: column;
     }
-    .panel {
-      display: flex;
-      flex-direction: column;
-      width: 100%;
-      max-width: 400px;
-    }
-    .row {
-      display: flex;
-      flex-direction: column;
-      margin-bottom: 8px;
-    }
-    .label {
-      color: #b8b8b8;
-      margin-bottom: 3px;
-    }
-    .inline {
-      display: flex;
-      flex-direction: row;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    .inline > * { margin-right: 8px; }
-    .inline > *:last-child { margin-right: 0; }
+    .panel { display: flex; flex-direction: column; width: 100%; max-width: 420px; }
     .header {
-      display: flex;
-      flex-direction: row;
-      align-items: center;
-      justify-content: space-between;
+      display: flex; flex-direction: row; align-items: center; justify-content: space-between;
+      padding-bottom: 10px; margin-bottom: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .wordmark { display: flex; flex-direction: row; align-items: baseline; }
+    .wordmark .a { font-size: 18px; font-weight: 700; color: #888888; letter-spacing: -0.01em; }
+    .wordmark .b { font-size: 18px; font-weight: 700; color: #EEEEEE; letter-spacing: -0.01em; margin-left: 5px; }
+    .meta { display: flex; flex-direction: row; align-items: center; }
+    .meta > * { margin-left: 10px; }
+    .credits { color: #B6A9C6; font-size: 14px; }
+
+    .capsule {
+      display: flex; flex-direction: row; align-items: center; align-self: flex-start;
+      padding: 3px 10px; border-radius: 100px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background-color: #262626;
+      color: #EEEEEE; font-size: 14px; font-weight: 700;
       margin-bottom: 8px;
     }
-    h1 { font-size: 14px; font-weight: 600; margin: 0; }
+
+    .row { display: flex; flex-direction: column; margin-bottom: 10px; }
+    .label {
+      color: #B6A9C6; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em;
+      margin-bottom: 5px;
+    }
+    .inline { display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; }
+    .inline > * { margin-right: 8px; margin-bottom: 4px; }
+    .inline > *:last-child { margin-right: 0; }
+
     input, textarea, select {
-      box-sizing: border-box;
-      padding: 5px 7px;
-      border: 1px solid #4a4a4a;
-      border-radius: 4px;
-      background-color: #1b1b1b;
-      color: #e6e6e6;
-      font-size: 12px;
+      box-sizing: border-box; padding: 7px 10px;
+      border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;
+      background-color: #262626; color: #EEEEEE; font-size: 14px;
     }
+    input:focus, textarea:focus, select:focus { border-color: #A381FF; }
     .full { width: 100%; }
-    .num { width: 72px; }
-    .pick { width: 110px; }
-    textarea { min-height: 60px; width: 100%; }
-    input[type="checkbox"] { margin: 0 4px 0 0; }
+    .num { width: 78px; }
+    .pick { width: 130px; }
+    textarea { min-height: 72px; width: 100%; line-height: 1.45; }
+    input[type="checkbox"] { margin: 0 6px 0 0; }
     input[type="range"] { width: 100%; }
+
     button {
-      padding: 5px 10px;
-      border: 1px solid #5a5a5a;
-      border-radius: 4px;
-      background-color: #3a3a3a;
-      color: #e6e6e6;
-      font-size: 12px;
+      padding: 6px 12px; border-radius: 100px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background-color: #262626; color: #EEEEEE; font-size: 14px;
     }
-    button.primary { background-color: #7c4dff; border-color: #7c4dff; color: #fff; font-weight: 600; }
-    button:disabled { opacity: 0.5; }
-    button.small { padding: 3px 8px; font-size: 11px; }
-    button.link { background-color: transparent; border-color: transparent; color: #b8b8b8; padding: 2px 0; }
-    .hint { color: #8a8a8a; font-size: 11px; margin-top: 3px; }
+    button.primary {
+      background-color: #A381FF; border-color: #A381FF; color: #1A0F36; font-weight: 600;
+      padding: 9px 18px;
+    }
+    button:disabled { opacity: 0.45; }
+    button.ghost { background-color: transparent; border-color: transparent; color: #B6A9C6; padding: 4px 6px; }
+    button.active { border-color: #A381FF; color: #EEEEEE; }
+
+    .hint { color: #888888; font-size: 14px; margin-top: 4px; line-height: 1.35; }
+    .card {
+      display: flex; flex-direction: column;
+      padding: 12px; margin-bottom: 10px; border-radius: 12px;
+      background-color: #262626; border: 1px solid rgba(255,255,255,0.08);
+    }
     .status {
-      padding: 6px 8px;
-      border-radius: 4px;
-      background-color: #1b1b1b;
-      min-height: 14px;
+      display: flex; flex-direction: column;
+      padding: 10px 12px; border-radius: 12px;
+      background-color: #262626; border: 1px solid rgba(255,255,255,0.08);
+      border-left: 3px solid #606060;
+      color: #EEEEEE; font-size: 14px; min-height: 18px;
     }
-    .status.error { color: #ff7b7b; }
-    .status.ok { color: #9ee493; }
-    .take {
-      display: flex;
-      flex-direction: column;
-      padding: 6px 8px;
-      margin-bottom: 6px;
-      border: 1px solid #3a3a3a;
-      border-radius: 4px;
-      background-color: #1f1f1f;
-    }
-    .take .name { font-weight: 600; margin-bottom: 2px; }
-    .take .meta { color: #8a8a8a; font-size: 11px; margin-bottom: 5px; }
+    .status.ok { border-left-color: #A381FF; }
+    .status.error { border-left-color: #B6A9C6; color: #EEEEEE; }
+    .take .name { font-weight: 700; margin-bottom: 2px; color: #EEEEEE; }
+    .take .meta2 { color: #888888; font-size: 14px; margin-bottom: 8px; }
     .hidden { display: none; }
-    .credits { color: #8a8a8a; font-size: 11px; }
-    .box {
-      display: flex;
-      flex-direction: column;
-      padding: 8px;
-      margin-bottom: 8px;
-      border: 1px solid #3a3a3a;
-      border-radius: 4px;
+    .seg { display: flex; flex-direction: row; }
+    .seg button { border-radius: 0; margin-right: -1px; }
+    .seg button:first-child { border-radius: 100px 0 0 100px; }
+    .seg button:last-child { border-radius: 0 100px 100px 0; }
+    .footer {
+      margin-top: 8px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08);
+      color: #606060; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em;
+      display: flex; flex-direction: row; justify-content: space-between;
     }
   </style>
 </head>
 <body>
   <div class="panel">
     <div class="header">
-      <h1>Stable Audio</h1>
-      <div class="inline">
+      <div class="wordmark"><span class="a">Stable</span><span class="b">Audio</span></div>
+      <div class="meta">
         <span id="credits" class="credits"></span>
-        <button id="toggleSettings" class="link">Settings</button>
+        <button id="toggleSettings" class="ghost">Settings</button>
       </div>
     </div>
 
-    <div id="settings" class="box hidden">
+    <div id="settings" class="card hidden">
+      <span class="capsule">Account</span>
       <div class="row">
         <span class="label">Stability API key</span>
         <input id="apiKey" class="full" type="password" placeholder="sk-..." />
@@ -139,32 +136,38 @@
         </select>
       </div>
       <div class="row inline">
-        <button id="saveSettings" class="small">Save settings</button>
+        <button id="saveSettings">Save settings</button>
       </div>
     </div>
 
     <div class="row">
       <span class="label">Mode</span>
-      <select id="mode" class="full">
+      <div id="modeSeg" class="seg">
+        <button data-mode="text-to-audio" class="active">Text</button>
+        <button data-mode="audio-to-audio">Audio to audio</button>
+        <button data-mode="inpaint">Inpaint</button>
+      </div>
+      <select id="mode" class="hidden">
         <option value="text-to-audio" selected>Text to audio</option>
-        <option value="audio-to-audio">Audio to audio (restyle a reference)</option>
-        <option value="inpaint">Inpaint (regenerate a section of a file)</option>
+        <option value="audio-to-audio">Audio to audio</option>
+        <option value="inpaint">Inpaint</option>
       </select>
     </div>
 
     <div class="row">
       <span class="label">Prompt</span>
-      <textarea id="prompt" placeholder="Warm analog synth bed, slow build, 90 BPM, cinematic, no drums"></textarea>
+      <textarea id="prompt" placeholder="TrackType: Music, warm analog synth bed, slow build, 90 BPM, cinematic, no drums"></textarea>
     </div>
 
-    <div id="a2aBlock" class="hidden">
+    <div id="a2aBlock" class="card hidden">
+      <span class="capsule">Reference</span>
       <div class="row">
-        <span class="label">Reference audio</span>
+        <span class="label">Source</span>
         <div class="inline">
-          <button id="pickAudio" class="small">Choose file</button>
-          <span id="audioName" class="hint">No file chosen</span>
+          <button id="refFromClip">Selected clip</button>
+          <button id="pickAudio">Choose file</button>
         </div>
-        <span class="hint">mp3 or wav, 6 s to the model's max length.</span>
+        <span id="audioName" class="hint">No reference yet. Select an audio clip on the timeline and click Selected clip, or choose a wav or mp3.</span>
       </div>
       <div id="strengthBlock" class="row">
         <span class="label">Strength <span id="strengthValue">0.70</span></span>
@@ -172,13 +175,17 @@
         <span class="hint">0 keeps the reference as is, 1 ignores it. Start around 0.7.</span>
       </div>
       <div id="maskBlock" class="row hidden">
-        <span class="label">Section to regenerate (seconds)</span>
+        <span class="label">Section to regenerate (seconds into the reference)</span>
         <div class="inline">
           <input id="maskStart" class="num" type="number" min="0" step="0.1" value="10" />
           <span>to</span>
           <input id="maskEnd" class="num" type="number" min="0" step="0.1" value="20" />
         </div>
-        <span class="hint">To extend a file, set start to its current length and Duration to the new total.</span>
+        <div class="inline">
+          <button id="maskFromInOut">Use sequence in/out</button>
+          <button id="extendToOut">Extend to out point</button>
+        </div>
+        <span class="hint">In/out set inside the selected clip becomes the mask. Extend sets the mask to start at the clip's end and grows Duration to reach the sequence out point.</span>
       </div>
     </div>
 
@@ -186,15 +193,15 @@
       <span class="label">Duration (seconds)</span>
       <div class="inline">
         <input id="duration" class="num" type="number" min="1" max="380" step="1" value="30" />
-        <button id="useSelection" class="small">Use in/out</button>
-        <button id="useClip" class="small">Use selected clip</button>
+        <button id="useSelection">Use in/out</button>
+        <button id="useClip">Use selected clip</button>
       </div>
       <span class="hint" id="durationHint">Max 380 s per request on stable-audio-3.</span>
     </div>
 
     <div class="row inline">
       <span class="label" style="margin: 0;">Takes</span>
-      <select id="takes" style="width: 56px;">
+      <select id="takes" style="width: 62px;">
         <option value="1">1</option>
         <option value="2" selected>2</option>
         <option value="3">3</option>
@@ -206,11 +213,12 @@
     </div>
 
     <div class="row inline">
-      <button id="generate" class="primary">Generate</button>
+      <button id="generate" class="primary">Generate &rarr;</button>
       <span class="label" style="margin: 0;">Place at</span>
       <select id="placeTarget" class="pick">
         <option value="in" selected>In point</option>
         <option value="playhead">Playhead</option>
+        <option value="clip">Reference clip start</option>
       </select>
       <input id="autoPlace" type="checkbox" />
       <span>Auto-place first take</span>
@@ -221,8 +229,14 @@
     </div>
 
     <div class="row">
-      <span class="label">Takes (in the "Stable Audio" bin, audition in the Source monitor)</span>
+      <span class="capsule">Takes</span>
+      <span class="hint" style="margin: 0 0 8px;">Imported to the "Stable Audio" bin. Audition in the Source monitor.</span>
       <div id="takesList" style="display: flex; flex-direction: column;"></div>
+    </div>
+
+    <div class="footer">
+      <span>Stable Audio for Premiere</span>
+      <span>Stability AI</span>
     </div>
   </div>
 

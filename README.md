@@ -4,7 +4,9 @@ A Premiere Pro panel that generates music and sound design with the Stability AP
 
 ## What it does
 
-- Text to audio and audio to audio (restyle a reference file)
+- Text to audio, audio to audio (restyle a reference), and inpaint (regenerate a section)
+- Reference audio from the selected timeline clip (reads its wav or mp3 media directly) or from a file
+- Inpaint mask from the sequence in/out set inside the selected clip; "Extend to out point" fills a gap after a clip
 - Duration from the sequence in/out range or the selected clip
 - 1 to 4 takes per run, each imported into a "Stable Audio" bin
 - One click places a take on a new audio track at the in point or playhead, as a single undo step
@@ -39,6 +41,8 @@ These are the calls most likely to need a fix on first run. Each is isolated in 
 | Selected clip duration | `getSelection().getTrackItems()[0].getDuration()`. Pre-26.x builds may differ. | `selectedClipDuration()` |
 | Import lookup | After `importFiles`, the item is found by name in the bin. If Premiere strips extensions differently, widen the match. | `importTake()` |
 | Network | Only `https://api.stability.ai` is allowed in the manifest. A `TypeError: Failed to fetch` means the domain list, not the key. | `manifest.json` |
+| Selected clip as reference | `getSelection().getTrackItems()`, then `getStartTime` / `getInPoint` / `getProjectItem` on the track item and `getMediaFilePath` on the clip item. Each is wrapped; missing ones fall back or produce a clear message. | `selectedClipInfo()` |
+| Reading media from disk | `fs.getEntryWithUrl("file:///...")` needs `fullAccess`. If it throws, check the manifest permission and the path separators (Windows paths are converted). | `readFileBytes()` |
 | Binary writes | `file.write(arrayBuffer, { format: formats.binary })`. If the WAV is 0 bytes, check this call. | `writeTake()` |
 
 ## API notes
@@ -49,6 +53,18 @@ These are the calls most likely to need a fix on first run. Each is isolated in 
 - Inpaint sends `audio`, `prompt`, `mask_start`, `mask_end` and `duration`. The docs do not spell out how `duration` beyond the source length behaves, so "extend" is a convention here (mask start = source length, duration = new total) until it is tested.
 - Each take gets a random non-zero seed so takes differ.
 - Rate limit is 150 requests per 10 s. Polling four takes at once stays far under it.
+
+## Timeline reference (audio to audio and inpaint)
+
+**Selected clip** reads the selected track item's media path (`ClipProjectItem.getMediaFilePath`) and loads the file from disk, which is why the manifest asks for `localFileSystem: "fullAccess"`. Only wav and mp3 media can be sent; for anything else (AAC in an MP4, for example) export the clip as WAV first or use Choose file.
+
+Mask math for inpaint: `mask = sequenceTime - clipStartOnTimeline + clipSourceInPoint`, so trimmed clips map correctly onto the source media. Extend sets the mask to start at the media's end (read from the WAV header) and grows Duration to the sequence out point.
+
+**Place at: Reference clip start** drops the result on a new track aligned with the clip it was made from, so an inpainted take lines up under the original for A/B.
+
+## Visual style
+
+Stability AI brand tokens: Studio Black `#1E1E1E` canvas, Black Obsidian `#262626` cards with `rgba(255,255,255,0.08)` hairlines, Canvas White `#EEEEEE` text, Desaturated Violet `#B6A9C6` labels, Grey Ash `#888888` hints. Artist Purple `#A381FF` appears only on the Generate pill, focus rings, and the active mode. 14px type floor, uppercase labels at +4% tracking, capsule section tags, no em dashes. Archivo is requested first and falls back to the system font because UXP cannot load web fonts.
 
 ## UXP layout notes
 

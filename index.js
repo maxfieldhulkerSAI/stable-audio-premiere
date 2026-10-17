@@ -80,9 +80,13 @@ const el = {
   toggleSettings: $("toggleSettings"),
   strengthBlock: $("strengthBlock"),
   mode: $("mode"),
+  modeSeg: $("modeSeg"),
   prompt: $("prompt"),
   a2aBlock: $("a2aBlock"),
   pickAudio: $("pickAudio"),
+  refFromClip: $("refFromClip"),
+  maskFromInOut: $("maskFromInOut"),
+  extendToOut: $("extendToOut"),
   audioName: $("audioName"),
   strength: $("strength"),
   strengthValue: $("strengthValue"),
@@ -105,7 +109,7 @@ const el = {
 };
 
 const state = {
-  referenceAudio: null, // { name, arrayBuffer }
+  referenceAudio: null, // { name, arrayBuffer, clip? }  clip = timeline info when taken from the selection
   takes: [], // { id, name, prompt, duration, nativePath, projectItem }
   busy: false,
 };
@@ -119,7 +123,7 @@ function setStatus(message, kind) {
 function setBusy(busy) {
   state.busy = busy;
   el.generate.disabled = busy;
-  el.generate.textContent = busy ? "Generating..." : "Generate";
+  el.generate.textContent = busy ? "Generating..." : "Generate →";
 }
 
 /* ------------------------------------------------------------------ */
@@ -251,7 +255,7 @@ async function generateOne(opts, onTick) {
       Authorization: "Bearer " + apiKey(),
       Accept: "audio/*",
       "stability-client-id": "stable-audio-premiere",
-      "stability-client-version": "0.1.0",
+      "stability-client-version": "0.2.0",
     },
     body: buildForm(opts),
   });
@@ -354,10 +358,142 @@ async function selectedClipDuration() {
   return isFinite(d) && d > 0 ? d : null;
 }
 
+/**
+ * The first selected clip on the timeline, with its media path and timing.
+ * Returns { trackItem, projectItem, mediaPath, name, startS, endS, sourceInS, durationS }.
+ */
+async function selectedClipInfo() {
+  const { sequence } = await activeProjectAndSequence();
+  const selection = await sequence.getSelection();
+  const items = await selection.getTrackItems();
+  if (!items || !items.length) throw new Error("Select a clip on the timeline first.");
+  const trackItem = items[0];
+
+  const read = async (fn) => {
+    try { return tickSeconds(await trackItem[fn]()); } catch (e) { return NaN; }
+  };
+  const startS = await read("getStartTime");
+  const endS = await read("getEndTime");
+  const sourceInS = await read("getInPoint");
+  let durationS = await read("getDuration");
+  if (!isFinite(durationS) && isFinite(startS) && isFinite(endS)) durationS = endS - startS;
+
+  let projectItem = null;
+  try { projectItem = await trackItem.getProjectItem(); } catch (e) { /* older builds */ }
+  let name = "clip";
+  try { name = (await trackItem.getName()) || (projectItem && projectItem.name) || name; } catch (e) { if (projectItem && projectItem.name) name = projectItem.name; }
+
+  let mediaPath = null;
+  if (projectItem) {
+    const clip = asClip(projectItem);
+    try { mediaPath = await clip.getMediaFilePath(); } catch (e) { console.warn("getMediaFilePath failed", e); }
+  }
+  return { trackItem, projectItem, mediaPath, name, startS, endS, sourceInS, durationS };
+}
+
+/** Reads a file anywhere on disk (needs localFileSystem: fullAccess). */
+async function readFileBytes(nativePath) {
+  let p = nativePath.replace(/\\/g, "/");
+  if (!p.startsWith("/")) p = "/" + p; // Windows drive letter
+  const entry = await fs.getEntryWithUrl("file://" + p);
+  return entry.read({ format: formats.binary });
+}
+
+/** Uses the selected timeline clip's media as the reference audio. */
+async function referenceFromSelectedClip() {
+  const info = await selectedClipInfo();
+  if (!info.mediaPath) throw new Error("Could not read the media path of the selected clip. Use Choose file instead.");
+  const ext = (info.mediaPath.split(".").pop() || "").toLowerCase();
+  if (ext !== "wav" && ext !== "mp3") {
+    throw new Error("The clip's media is ." + ext + ". The API accepts wav or mp3. Export the clip as WAV, or use Choose file.");
+  }
+  const arrayBuffer = await readFileBytes(info.mediaPath);
+  const fileName = info.mediaPath.split(/[\\/]/).pop();
+  state.referenceAudio = { name: fileName, arrayBuffer, clip: info };
+  const secs = isFinite(info.durationS) ? " (" + info.durationS.toFixed(1) + " s on the timeline)" : "";
+  el.audioName.textContent = fileName + secs;
+  return info;
+}
+
+/**
+ * Inpaint mask from the sequence in/out, expressed in seconds into the reference media.
+ * mask = (sequence time - clip start on timeline) + clip source in point.
+ */
+async function maskFromInOut() {
+  const info = state.referenceAudio && state.referenceAudio.clip ? state.referenceAudio.clip : await referenceFromSelectedClip();
+  const { sequence } = await activeProjectAndSequence();
+  const inS = tickSeconds(await sequence.getInPoint());
+  const outS = tickSeconds(await sequence.getOutPoint());
+  if (!isFinite(inS) || !isFinite(outS) || outS <= inS || outS > 60 * 60 * 24) {
+    throw new Error("Set in and out points inside the selected clip first.");
+  }
+  const offset = (isFinite(info.sourceInS) ? info.sourceInS : 0) - (isFinite(info.startS) ? info.startS : 0);
+  const maskStart = Math.max(0, inS + offset);
+  const maskEnd = Math.max(maskStart + 0.1, outS + offset);
+  el.maskStart.value = maskStart.toFixed(1);
+  el.maskEnd.value = maskEnd.toFixed(1);
+  const mediaLen = await referenceLengthSeconds();
+  if (mediaLen > 0) el.duration.value = Math.round(mediaLen);
+  setStatus("Mask set to " + maskStart.toFixed(1) + " to " + maskEnd.toFixed(1) + " s of " + info.name + ".", "ok");
+}
+
+/**
+ * Extend: mask starts where the media ends, duration grows to reach the sequence out point.
+ * Convention until the endpoint's behavior past the source length is confirmed.
+ */
+async function extendToOut() {
+  const info = state.referenceAudio && state.referenceAudio.clip ? state.referenceAudio.clip : await referenceFromSelectedClip();
+  const { sequence } = await activeProjectAndSequence();
+  const outS = tickSeconds(await sequence.getOutPoint());
+  if (!isFinite(outS) || !isFinite(info.endS) || outS <= info.endS || outS > 60 * 60 * 24) {
+    throw new Error("Set the sequence out point after the end of the selected clip.");
+  }
+  const mediaLen = await referenceLengthSeconds();
+  if (!(mediaLen > 0)) throw new Error("Could not read the reference length.");
+  const gap = outS - info.endS;
+  const newTotal = Math.min(family().maxDuration, Math.ceil(mediaLen + gap));
+  el.maskStart.value = mediaLen.toFixed(1);
+  el.maskEnd.value = newTotal.toFixed(1);
+  el.duration.value = newTotal;
+  setStatus("Extend: regenerate from " + mediaLen.toFixed(1) + " s to " + newTotal + " s (" + gap.toFixed(1) + " s gap).", "ok");
+}
+
+/** Length of the reference audio in seconds from its WAV header, or the clip duration as a fallback. */
+async function referenceLengthSeconds() {
+  const ref = state.referenceAudio;
+  if (!ref) return -1;
+  const wavLen = wavDurationSeconds(ref.arrayBuffer);
+  if (wavLen > 0) return wavLen;
+  if (ref.clip && isFinite(ref.clip.durationS)) return ref.clip.durationS;
+  return -1;
+}
+
+/** Parses a PCM WAV header for its duration. Returns -1 for anything else (mp3). */
+function wavDurationSeconds(buf) {
+  try {
+    const dv = new DataView(buf);
+    if (dv.getUint32(0, false) !== 0x52494646 || dv.getUint32(8, false) !== 0x57415645) return -1; // RIFF / WAVE
+    let pos = 12, byteRate = 0, dataLen = 0;
+    while (pos + 8 <= buf.byteLength) {
+      const id = dv.getUint32(pos, false);
+      const size = dv.getUint32(pos + 4, true);
+      if (id === 0x666d7420) byteRate = dv.getUint32(pos + 16, true); // "fmt "
+      if (id === 0x64617461) { dataLen = size; break; }                // "data"
+      pos += 8 + size + (size & 1);
+    }
+    return byteRate > 0 && dataLen > 0 ? dataLen / byteRate : -1;
+  } catch (e) {
+    return -1;
+  }
+}
+
 /** Where to place the cue, in seconds. */
 async function placementSeconds(target) {
   const { sequence } = await activeProjectAndSequence();
-  if (target === "in") {
+  if (target === "clip" && state.referenceAudio && state.referenceAudio.clip && isFinite(state.referenceAudio.clip.startS)) {
+    return state.referenceAudio.clip.startS;
+  }
+  if (target === "in" || target === "clip") {
     const inS = tickSeconds(await sequence.getInPoint());
     if (isFinite(inS) && inS >= 0 && inS < 60 * 60 * 24) return inS;
   }
@@ -469,14 +605,14 @@ function renderTakes() {
     .reverse()
     .forEach((take) => {
       const card = document.createElement("div");
-      card.className = "take";
+      card.className = "card take";
 
       const name = document.createElement("div");
       name.className = "name";
       name.textContent = take.name;
 
       const meta = document.createElement("div");
-      meta.className = "meta";
+      meta.className = "meta2";
       meta.textContent = take.duration + " s  ·  " + take.prompt;
 
       const row = document.createElement("div");
@@ -674,9 +810,37 @@ async function onPlace(take, target) {
 function onModeChange() {
   const mode = el.mode.value;
   const needsAudio = mode === "audio-to-audio" || mode === "inpaint";
-  el.a2aBlock.className = needsAudio ? "" : "hidden";
+  el.a2aBlock.className = needsAudio ? "card" : "card hidden";
   el.strengthBlock.className = mode === "audio-to-audio" ? "row" : "row hidden";
   el.maskBlock.className = mode === "inpaint" ? "row" : "row hidden";
+  const buttons = el.modeSeg.querySelectorAll("button");
+  for (let i = 0; i < buttons.length; i++) {
+    buttons[i].className = buttons[i].getAttribute("data-mode") === mode ? "active" : "";
+  }
+}
+
+function onModeButton(evt) {
+  const mode = evt.currentTarget.getAttribute("data-mode");
+  if (!mode) return;
+  el.mode.value = mode;
+  onModeChange();
+}
+
+async function onRefFromClip() {
+  try {
+    await referenceFromSelectedClip();
+    setStatus("Reference set from the selected clip.", "ok");
+  } catch (e) {
+    setStatus(e.message || String(e), "error");
+  }
+}
+
+async function onMaskFromInOut() {
+  try { await maskFromInOut(); } catch (e) { setStatus(e.message || String(e), "error"); }
+}
+
+async function onExtendToOut() {
+  try { await extendToOut(); } catch (e) { setStatus(e.message || String(e), "error"); }
 }
 
 function onModelChange() {
@@ -694,7 +858,7 @@ function onModelChange() {
 
 function toggleSettings() {
   const open = el.settings.className.indexOf("hidden") >= 0;
-  el.settings.className = open ? "box" : "box hidden";
+  el.settings.className = open ? "card" : "card hidden";
 }
 
 /* ------------------------------------------------------------------ */
@@ -709,6 +873,13 @@ el.toggleSettings.addEventListener("click", toggleSettings);
 el.model.addEventListener("change", onModelChange);
 el.takes.addEventListener("change", updateCost);
 el.mode.addEventListener("change", onModeChange);
+(function wireModeButtons() {
+  const buttons = el.modeSeg.querySelectorAll("button");
+  for (let i = 0; i < buttons.length; i++) buttons[i].addEventListener("click", onModeButton);
+})();
+el.refFromClip.addEventListener("click", onRefFromClip);
+el.maskFromInOut.addEventListener("click", onMaskFromInOut);
+el.extendToOut.addEventListener("click", onExtendToOut);
 el.pickAudio.addEventListener("click", () => pickReferenceAudio().catch((e) => setStatus(e.message, "error")));
 el.strength.addEventListener("input", () => (el.strengthValue.textContent = Number(el.strength.value).toFixed(2)));
 el.useSelection.addEventListener("click", onUseSelection);
@@ -717,7 +888,7 @@ el.generate.addEventListener("click", onGenerate);
 
 loadSettings().then(() => {
   // Open Settings on first run so the key field is visible.
-  if (!el.apiKey.value) el.settings.className = "box";
+  if (!el.apiKey.value) el.settings.className = "card";
   onModeChange();
   updateCost();
   renderTakes();
