@@ -136,6 +136,14 @@
           <option value="mp3">MP3</option>
         </select>
       </div>
+      <div class="row">
+        <span class="label">WAV export preset (.epr)</span>
+        <div class="inline">
+          <button id="pickPreset">Choose preset</button>
+          <span id="presetName" class="hint">None. Selected ranges will be cut from the clip's WAV media instead.</span>
+        </div>
+        <span class="hint">Lets the panel render exactly what you hear between in and out (mixes, effects, non-WAV media). Make one once: File > Export > Media, pick Waveform Audio, Save Preset. Keep the Work Area Bar hidden; Premiere exports the work area instead of in/out when it is shown.</span>
+      </div>
       <div class="row inline">
         <button id="saveSettings">Save settings</button>
       </div>
@@ -165,10 +173,10 @@
       <div class="row">
         <span class="label">Source</span>
         <div class="inline">
-          <button id="refFromClip">Selected clip</button>
+          <button id="refFromClip">Use selected range</button>
           <button id="pickAudio">Choose file</button>
         </div>
-        <span id="audioName" class="hint">No reference yet. Select an audio clip on the timeline and click Selected clip, or choose a wav or mp3.</span>
+        <span id="audioName" class="hint">Set in and out on the timeline, select the audio clip, then click Use selected range. The audio between in and out becomes the reference.</span>
       </div>
       <div id="strengthBlock" class="row">
         <span class="label">Strength <span id="strengthValue">0.70</span></span>
@@ -183,10 +191,9 @@
           <input id="maskEnd" class="num" type="number" min="0" step="0.1" value="20" />
         </div>
         <div class="inline">
-          <button id="maskFromInOut">Use sequence in/out</button>
           <button id="extendToOut">Extend to out point</button>
         </div>
-        <span class="hint">In/out set inside the selected clip becomes the mask. Extend sets the mask to start at the clip's end and grows Duration to reach the sequence out point.</span>
+        <span class="hint">Use selected range sends the whole clip as context and marks your in/out as the section to regenerate. Extend sets the mask to start at the clip's end and grows Duration to reach the sequence out point.</span>
       </div>
     </div>
 
@@ -219,9 +226,9 @@
       <select id="placeTarget" class="pick">
         <option value="in" selected>In point</option>
         <option value="playhead">Playhead</option>
-        <option value="clip">Reference clip start</option>
+        <option value="clip">Reference range start</option>
       </select>
-      <input id="autoPlace" type="checkbox" />
+      <input id="autoPlace" type="checkbox" checked />
       <span>Auto-place first take</span>
     </div>
 

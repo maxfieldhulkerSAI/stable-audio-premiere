@@ -85,8 +85,9 @@ const el = {
   a2aBlock: $("a2aBlock"),
   pickAudio: $("pickAudio"),
   refFromClip: $("refFromClip"),
-  maskFromInOut: $("maskFromInOut"),
   extendToOut: $("extendToOut"),
+  pickPreset: $("pickPreset"),
+  presetName: $("presetName"),
   audioName: $("audioName"),
   strength: $("strength"),
   strengthValue: $("strengthValue"),
@@ -109,7 +110,8 @@ const el = {
 };
 
 const state = {
-  referenceAudio: null, // { name, arrayBuffer, clip? }  clip = timeline info when taken from the selection
+  presetPath: "", // optional .epr for rendering the selected range through Premiere's exporter
+  referenceAudio: null, // { name, arrayBuffer, clip? }  clip = { startS, endS } of the reference window on the timeline
   takes: [], // { id, name, prompt, duration, nativePath, projectItem }
   busy: false,
 };
@@ -149,6 +151,7 @@ async function loadSettings() {
     if (s.apiKey) el.apiKey.value = s.apiKey;
     if (s.model) el.model.value = s.model;
     if (s.outputFormat) el.outputFormat.value = s.outputFormat;
+    if (s.presetPath) setPreset(s.presetPath);
   } catch (e) {
     console.warn("Could not load settings", e);
   }
@@ -159,6 +162,7 @@ async function saveSettings() {
     apiKey: el.apiKey.value.trim(),
     model: el.model.value,
     outputFormat: el.outputFormat.value,
+    presetPath: state.presetPath,
   };
   try {
     await secureStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
@@ -173,6 +177,18 @@ function apiKey() {
   const key = el.apiKey.value.trim();
   if (!key) throw new Error("Add your Stability API key under Settings.");
   return key;
+}
+
+function setPreset(path) {
+  state.presetPath = path || "";
+  el.presetName.textContent = path ? path.split(/[\\/]/).pop() : "None. Selected ranges will be cut from the clip's WAV media instead.";
+}
+
+async function pickPreset() {
+  const file = await fs.getFileForOpening({ types: ["epr"] });
+  if (!file) return;
+  setPreset(file.nativePath);
+  await saveSettings();
 }
 
 /* ------------------------------------------------------------------ */
@@ -255,7 +271,7 @@ async function generateOne(opts, onTick) {
       Authorization: "Bearer " + apiKey(),
       Accept: "audio/*",
       "stability-client-id": "stable-audio-premiere",
-      "stability-client-version": "0.2.0",
+      "stability-client-version": "0.3.0",
     },
     body: buildForm(opts),
   });
@@ -399,92 +415,236 @@ async function readFileBytes(nativePath) {
   return entry.read({ format: formats.binary });
 }
 
-/** Uses the selected timeline clip's media as the reference audio. */
-async function referenceFromSelectedClip() {
-  const info = await selectedClipInfo();
-  if (!info.mediaPath) throw new Error("Could not read the media path of the selected clip. Use Choose file instead.");
-  const ext = (info.mediaPath.split(".").pop() || "").toLowerCase();
-  if (ext !== "wav" && ext !== "mp3") {
-    throw new Error("The clip's media is ." + ext + ". The API accepts wav or mp3. Export the clip as WAV, or use Choose file.");
-  }
-  const arrayBuffer = await readFileBytes(info.mediaPath);
-  const fileName = info.mediaPath.split(/[\\/]/).pop();
-  state.referenceAudio = { name: fileName, arrayBuffer, clip: info };
-  const secs = isFinite(info.durationS) ? " (" + info.durationS.toFixed(1) + " s on the timeline)" : "";
-  el.audioName.textContent = fileName + secs;
-  return info;
-}
-
-/**
- * Inpaint mask from the sequence in/out, expressed in seconds into the reference media.
- * mask = (sequence time - clip start on timeline) + clip source in point.
- */
-async function maskFromInOut() {
-  const info = state.referenceAudio && state.referenceAudio.clip ? state.referenceAudio.clip : await referenceFromSelectedClip();
+/** Sequence in/out as seconds, or throws when not set. */
+async function sequenceInOut() {
   const { sequence } = await activeProjectAndSequence();
   const inS = tickSeconds(await sequence.getInPoint());
   const outS = tickSeconds(await sequence.getOutPoint());
   if (!isFinite(inS) || !isFinite(outS) || outS <= inS || outS > 60 * 60 * 24) {
-    throw new Error("Set in and out points inside the selected clip first.");
+    throw new Error("Set in and out points on the timeline first.");
   }
-  const offset = (isFinite(info.sourceInS) ? info.sourceInS : 0) - (isFinite(info.startS) ? info.startS : 0);
-  const maskStart = Math.max(0, inS + offset);
-  const maskEnd = Math.max(maskStart + 0.1, outS + offset);
-  el.maskStart.value = maskStart.toFixed(1);
-  el.maskEnd.value = maskEnd.toFixed(1);
-  const mediaLen = await referenceLengthSeconds();
-  if (mediaLen > 0) el.duration.value = Math.round(mediaLen);
-  setStatus("Mask set to " + maskStart.toFixed(1) + " to " + maskEnd.toFixed(1) + " s of " + info.name + ".", "ok");
+  return { inS, outS };
 }
 
-/**
- * Extend: mask starts where the media ends, duration grows to reach the sequence out point.
- * Convention until the endpoint's behavior past the source length is confirmed.
- */
-async function extendToOut() {
-  const info = state.referenceAudio && state.referenceAudio.clip ? state.referenceAudio.clip : await referenceFromSelectedClip();
-  const { sequence } = await activeProjectAndSequence();
-  const outS = tickSeconds(await sequence.getOutPoint());
-  if (!isFinite(outS) || !isFinite(info.endS) || outS <= info.endS || outS > 60 * 60 * 24) {
-    throw new Error("Set the sequence out point after the end of the selected clip.");
-  }
-  const mediaLen = await referenceLengthSeconds();
-  if (!(mediaLen > 0)) throw new Error("Could not read the reference length.");
-  const gap = outS - info.endS;
-  const newTotal = Math.min(family().maxDuration, Math.ceil(mediaLen + gap));
-  el.maskStart.value = mediaLen.toFixed(1);
-  el.maskEnd.value = newTotal.toFixed(1);
-  el.duration.value = newTotal;
-  setStatus("Extend: regenerate from " + mediaLen.toFixed(1) + " s to " + newTotal + " s (" + gap.toFixed(1) + " s gap).", "ok");
-}
+/* ---- WAV slicing ------------------------------------------------- */
 
-/** Length of the reference audio in seconds from its WAV header, or the clip duration as a fallback. */
-async function referenceLengthSeconds() {
-  const ref = state.referenceAudio;
-  if (!ref) return -1;
-  const wavLen = wavDurationSeconds(ref.arrayBuffer);
-  if (wavLen > 0) return wavLen;
-  if (ref.clip && isFinite(ref.clip.durationS)) return ref.clip.durationS;
-  return -1;
+function parseWavHeader(buf) {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 12 || dv.getUint32(0, false) !== 0x52494646 || dv.getUint32(8, false) !== 0x57415645) return null;
+  const h = { format: 0, channels: 0, sampleRate: 0, byteRate: 0, blockAlign: 0, bits: 0, dataPos: -1, dataLen: 0, fmtPos: -1, fmtLen: 0 };
+  let pos = 12;
+  while (pos + 8 <= buf.byteLength) {
+    const id = dv.getUint32(pos, false);
+    const size = dv.getUint32(pos + 4, true);
+    if (id === 0x666d7420) { // "fmt "
+      h.fmtPos = pos; h.fmtLen = size;
+      h.format = dv.getUint16(pos + 8, true);
+      h.channels = dv.getUint16(pos + 10, true);
+      h.sampleRate = dv.getUint32(pos + 12, true);
+      h.byteRate = dv.getUint32(pos + 16, true);
+      h.blockAlign = dv.getUint16(pos + 20, true);
+      h.bits = dv.getUint16(pos + 22, true);
+    } else if (id === 0x64617461) { // "data"
+      h.dataPos = pos + 8;
+      h.dataLen = Math.min(size, buf.byteLength - h.dataPos);
+      break;
+    }
+    pos += 8 + size + (size & 1);
+  }
+  return h.dataPos >= 0 && h.byteRate > 0 ? h : null;
 }
 
 /** Parses a PCM WAV header for its duration. Returns -1 for anything else (mp3). */
 function wavDurationSeconds(buf) {
   try {
-    const dv = new DataView(buf);
-    if (dv.getUint32(0, false) !== 0x52494646 || dv.getUint32(8, false) !== 0x57415645) return -1; // RIFF / WAVE
-    let pos = 12, byteRate = 0, dataLen = 0;
-    while (pos + 8 <= buf.byteLength) {
-      const id = dv.getUint32(pos, false);
-      const size = dv.getUint32(pos + 4, true);
-      if (id === 0x666d7420) byteRate = dv.getUint32(pos + 16, true); // "fmt "
-      if (id === 0x64617461) { dataLen = size; break; }                // "data"
-      pos += 8 + size + (size & 1);
-    }
-    return byteRate > 0 && dataLen > 0 ? dataLen / byteRate : -1;
+    const h = parseWavHeader(buf);
+    return h ? h.dataLen / h.byteRate : -1;
   } catch (e) {
     return -1;
   }
+}
+
+/** Cuts [startS, endS] out of a PCM WAV and returns a new standalone WAV. */
+function sliceWav(buf, startS, endS) {
+  const h = parseWavHeader(buf);
+  if (!h) throw new Error("Not a WAV file.");
+  if (h.format !== 1 && h.format !== 3 && h.format !== 0xFFFE) throw new Error("Compressed WAV cannot be cut in place. Set a WAV export preset in Settings.");
+  const total = h.dataLen / h.byteRate;
+  const a = Math.max(0, Math.min(startS, total));
+  const b = Math.max(a, Math.min(endS, total));
+  const align = h.blockAlign || 1;
+  const from = Math.floor((a * h.byteRate) / align) * align;
+  const to = Math.floor((b * h.byteRate) / align) * align;
+  const data = new Uint8Array(buf, h.dataPos + from, to - from);
+  const fmt = new Uint8Array(buf, h.fmtPos, 8 + h.fmtLen + (h.fmtLen & 1));
+  const out = new ArrayBuffer(12 + fmt.byteLength + 8 + data.byteLength);
+  const dv = new DataView(out);
+  const u8 = new Uint8Array(out);
+  dv.setUint32(0, 0x52494646, false);
+  dv.setUint32(4, out.byteLength - 8, true);
+  dv.setUint32(8, 0x57415645, false);
+  u8.set(fmt, 12);
+  let p = 12 + fmt.byteLength;
+  dv.setUint32(p, 0x64617461, false);
+  dv.setUint32(p + 4, data.byteLength, true);
+  u8.set(data, p + 8);
+  return out;
+}
+
+/* ---- Range capture ------------------------------------------------ */
+
+/**
+ * Returns the audio between startS and endS on the timeline as WAV bytes.
+ * Preferred: render through Premiere's exporter with the user's WAV preset (hears exactly the mix).
+ * Fallback: cut the range out of the selected clip's WAV media.
+ */
+async function captureRange(startS, endS, label) {
+  if (state.presetPath) {
+    try {
+      return await exportRange(startS, endS, label);
+    } catch (e) {
+      console.warn("Export path failed, trying media slice", e);
+      try {
+        return await sliceFromClipMedia(startS, endS, label);
+      } catch (e2) {
+        throw new Error("Export failed (" + e.message + ") and the clip media could not be cut (" + e2.message + ").");
+      }
+    }
+  }
+  return sliceFromClipMedia(startS, endS, label);
+}
+
+async function setSequenceInOut(project, sequence, startS, endS) {
+  let err = null;
+  project.lockedAccess(() => {
+    project.executeTransaction((compound) => {
+      try {
+        compound.addAction(sequence.createSetInPointAction(ppro.TickTime.createWithSeconds(startS)));
+        compound.addAction(sequence.createSetOutPointAction(ppro.TickTime.createWithSeconds(endS)));
+      } catch (e) { err = e; }
+    }, "Stable Audio: set range");
+  });
+  if (err) throw err;
+}
+
+async function exportRange(startS, endS, label) {
+  const { project, sequence } = await activeProjectAndSequence();
+  const encoder = ppro.EncoderManager.getManager();
+  const origIn = tickSeconds(await sequence.getInPoint());
+  const origOut = tickSeconds(await sequence.getOutPoint());
+  const changed = Math.abs(origIn - startS) > 0.0005 || Math.abs(origOut - endS) > 0.0005;
+  if (changed) await setSequenceInOut(project, sequence, startS, endS);
+
+  const folder = await takesFolder();
+  const base = "SA_ref_" + new Date().toISOString().replace(/[:.]/g, "").slice(0, 15) + "_" + slug(label || "range");
+  const sep = folder.nativePath.indexOf("\\") >= 0 ? "\\" : "/";
+  const outPath = folder.nativePath + sep + base + ".wav";
+  let ok = false;
+  try {
+    ok = await encoder.exportSequence(sequence, ppro.Constants.ExportType.IMMEDIATELY, outPath, state.presetPath, false);
+  } finally {
+    if (changed && isFinite(origIn) && isFinite(origOut) && origOut > origIn && origOut < 60 * 60 * 24) {
+      try { await setSequenceInOut(project, sequence, origIn, origOut); } catch (e) { console.warn("Could not restore in/out", e); }
+    }
+  }
+  if (!ok) throw new Error("Premiere refused the export. Check the preset is a Waveform Audio preset.");
+
+  // The exporter may add its own extension or suffix; find the newest file with our prefix.
+  const entries = await folder.getEntries();
+  const hits = entries.filter((e) => e.isFile && e.name.indexOf(base) === 0);
+  if (!hits.length) throw new Error("Export reported success but no file appeared.");
+  const file = hits[hits.length - 1];
+  const bytes = await file.read({ format: formats.binary });
+  if (wavDurationSeconds(bytes) <= 0) throw new Error("Exported file is not a WAV. Use a Waveform Audio preset.");
+  return { name: file.name, arrayBuffer: bytes };
+}
+
+async function sliceFromClipMedia(startS, endS, label) {
+  const info = await selectedClipInfo();
+  if (!info.mediaPath) throw new Error("Could not read the media path of the selected clip.");
+  const ext = (info.mediaPath.split(".").pop() || "").toLowerCase();
+  if (ext !== "wav") {
+    throw new Error("The clip's media is ." + ext + ". Without a WAV export preset only WAV media can be cut. Add a preset under Settings.");
+  }
+  if (!isFinite(info.startS) || !isFinite(info.endS)) throw new Error("Could not read the clip's position on the timeline.");
+  if (startS < info.startS - 0.01 || endS > info.endS + 0.01) {
+    throw new Error("The in/out range must sit inside the selected clip (" + info.startS.toFixed(1) + " to " + info.endS.toFixed(1) + " s). Add a WAV export preset to capture across clips.");
+  }
+  const media = await readFileBytes(info.mediaPath);
+  const offset = (isFinite(info.sourceInS) ? info.sourceInS : 0) - info.startS;
+  const cut = sliceWav(media, startS + offset, endS + offset);
+  const name = (info.name || "clip").replace(/\.[^.]+$/, "") + "_" + startS.toFixed(1) + "-" + endS.toFixed(1) + "s.wav";
+  return { name, arrayBuffer: cut };
+}
+
+/**
+ * Audio to audio: the in/out range is the reference and the duration.
+ * Inpaint: the whole selected clip (up to the model's max) is the reference, in/out is the mask.
+ */
+async function referenceFromSelection() {
+  const mode = el.mode.value;
+  const { inS, outS } = await sequenceInOut();
+  const maxLen = family().maxDuration;
+
+  if (mode === "audio-to-audio") {
+    if (outS - inS < 6) throw new Error("The range must be at least 6 seconds for audio to audio.");
+    if (outS - inS > maxLen) throw new Error("The range is longer than " + maxLen + " s. Shorten it.");
+    const ref = await captureRange(inS, outS, "a2a");
+    state.referenceAudio = { name: ref.name, arrayBuffer: ref.arrayBuffer, clip: { startS: inS, endS: outS } };
+    el.duration.value = Math.round(outS - inS);
+    el.audioName.textContent = ref.name + " (" + (outS - inS).toFixed(1) + " s from the timeline)";
+    el.placeTarget.value = "clip";
+    return;
+  }
+
+  // Inpaint: context window around the selection.
+  const info = await selectedClipInfo();
+  if (!isFinite(info.startS) || !isFinite(info.endS)) throw new Error("Select the clip that contains the in/out range.");
+  if (inS < info.startS - 0.01 || outS > info.endS + 0.01) throw new Error("Set in and out inside the selected clip.");
+  let winStart = info.startS;
+  let winEnd = info.endS;
+  if (winEnd - winStart > maxLen) {
+    // Center the window on the selection, clamp to the clip.
+    const mid = (inS + outS) / 2;
+    winStart = Math.max(info.startS, mid - maxLen / 2);
+    winEnd = Math.min(info.endS, winStart + maxLen);
+    winStart = Math.max(info.startS, winEnd - maxLen);
+  }
+  if (winEnd - winStart < 6) throw new Error("The clip is shorter than 6 seconds; the API needs at least 6 s of context.");
+  const ref = await captureRange(winStart, winEnd, "inpaint");
+  state.referenceAudio = { name: ref.name, arrayBuffer: ref.arrayBuffer, clip: { startS: winStart, endS: winEnd, info } };
+  el.maskStart.value = (inS - winStart).toFixed(1);
+  el.maskEnd.value = (outS - winStart).toFixed(1);
+  el.duration.value = Math.round(winEnd - winStart);
+  el.audioName.textContent = ref.name + " (" + (winEnd - winStart).toFixed(1) + " s context, regenerating " + (inS - winStart).toFixed(1) + " to " + (outS - winStart).toFixed(1) + " s)";
+  el.placeTarget.value = "clip";
+}
+
+/**
+ * Extend: reference is the tail of the selected clip, mask starts where it ends,
+ * duration grows to the sequence out point.
+ */
+async function extendToOut() {
+  const { sequence } = await activeProjectAndSequence();
+  const info = await selectedClipInfo();
+  const outS = tickSeconds(await sequence.getOutPoint());
+  if (!isFinite(outS) || !isFinite(info.endS) || outS <= info.endS || outS > 60 * 60 * 24) {
+    throw new Error("Set the sequence out point after the end of the selected clip.");
+  }
+  const maxLen = family().maxDuration;
+  const gap = outS - info.endS;
+  if (gap >= maxLen - 6) throw new Error("The gap is too long to extend in one pass (max " + maxLen + " s total).");
+  const ctx = Math.min(info.endS - info.startS, maxLen - gap);
+  const winStart = info.endS - ctx;
+  const ref = await captureRange(winStart, info.endS, "extend");
+  state.referenceAudio = { name: ref.name, arrayBuffer: ref.arrayBuffer, clip: { startS: winStart, endS: info.endS, info } };
+  const newTotal = Math.min(maxLen, Math.ceil(ctx + gap));
+  el.maskStart.value = ctx.toFixed(1);
+  el.maskEnd.value = newTotal.toFixed(1);
+  el.duration.value = newTotal;
+  el.audioName.textContent = ref.name + " (" + ctx.toFixed(1) + " s of context)";
+  el.placeTarget.value = "clip";
+  setStatus("Extend: " + ctx.toFixed(1) + " s of context, regenerate from " + ctx.toFixed(1) + " to " + newTotal + " s (" + gap.toFixed(1) + " s gap).", "ok");
 }
 
 /** Where to place the cue, in seconds. */
@@ -558,33 +718,78 @@ async function importTake(project, nativePath, fileName) {
   return asClip(item);
 }
 
-/** Overwrites the clip onto a new audio track at `seconds`, as one undo step. */
+/** Counts clips across all audio tracks, or -1 if the API is unavailable. */
+async function countAudioClips(sequence) {
+  try {
+    const n = await sequence.getAudioTrackCount();
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      const track = await sequence.getAudioTrack(i);
+      let items = null;
+      try { items = await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false); } catch (e) { items = await track.getTrackItems(); }
+      total += items ? items.length : 0;
+    }
+    return total;
+  } catch (e) {
+    console.warn("countAudioClips unavailable", e);
+    return -1;
+  }
+}
+
+/** Runs one placement action inside a transaction; errors thrown inside the callback are rethrown. */
+function runAction(project, makeAction, undoLabel) {
+  let err = null;
+  project.lockedAccess(() => {
+    project.executeTransaction((compound) => {
+      try {
+        compound.addAction(makeAction());
+      } catch (e) {
+        err = e;
+      }
+    }, undoLabel);
+  });
+  if (err) throw err;
+}
+
+/**
+ * Places the clip at `seconds` as one undo step. Tries, in order: overwrite on a new track,
+ * overwrite on the last track, insert on the last track. Verifies that a clip was added.
+ */
 async function placeTake(take, target) {
   const { project, sequence } = await activeProjectAndSequence();
   const seconds = await placementSeconds(target);
   const time = ppro.TickTime.createWithSeconds(seconds);
   const editor = ppro.SequenceEditor.getEditor(sequence);
   const audioTracks = await sequence.getAudioTrackCount();
+  const item = asClip(take.projectItem);
+  const before = await countAudioClips(sequence);
 
-  // Track index equal to the current count asks Premiere for a new track
-  // (the reference says an index past the existing tracks creates one).
-  const tryPlace = (audioTrackIndex) => {
-    project.lockedAccess(() => {
-      project.executeTransaction((compound) => {
-        compound.addAction(
-          editor.createOverwriteItemAction(take.projectItem, time, 0, audioTrackIndex)
-        );
-      }, "Stable Audio: place " + take.name);
-    });
-  };
+  const attempts = [
+    { label: "overwrite, new track", run: () => editor.createOverwriteItemAction(item, time, 0, audioTracks) },
+    { label: "overwrite, last track", run: () => editor.createOverwriteItemAction(item, time, 0, Math.max(0, audioTracks - 1)) },
+    { label: "insert, last track", run: () => editor.createInsertProjectItemAction(item, time, 0, Math.max(0, audioTracks - 1), true) },
+  ];
 
-  try {
-    tryPlace(audioTracks);
-  } catch (e) {
-    console.warn("New-track placement failed, using last existing track", e);
-    tryPlace(Math.max(0, audioTracks - 1));
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      runAction(project, attempt.run, "Stable Audio: place " + take.name);
+    } catch (e) {
+      errors.push(attempt.label + ": " + (e.message || e));
+      continue;
+    }
+    if (before < 0) {
+      console.log("[StableAudio] placed via " + attempt.label + " (unverified)");
+      return seconds;
+    }
+    const after = await countAudioClips(sequence);
+    if (after > before) {
+      console.log("[StableAudio] placed via " + attempt.label);
+      return seconds;
+    }
+    errors.push(attempt.label + ": no clip appeared");
   }
-  return seconds;
+  throw new Error("Could not place the clip on the timeline. " + errors.join(" | "));
 }
 
 /* ------------------------------------------------------------------ */
@@ -785,11 +990,17 @@ async function onGenerate() {
     let msg = successes.length + " take" + (successes.length > 1 ? "s" : "") + " in the \"" + CONFIG.binName + "\" bin.";
     if (failures.length) msg += " " + failures.length + " failed: " + failures[0].reason.message;
 
+    let placeError = null;
     if (el.autoPlace.checked && newTakes[0]) {
-      const at = await placeTake(newTakes[0], el.placeTarget.value);
-      msg += " First take placed at " + at.toFixed(2) + " s.";
+      try {
+        const at = await placeTake(newTakes[0], el.placeTarget.value);
+        msg += " First take placed at " + at.toFixed(2) + " s.";
+      } catch (e) {
+        placeError = e.message || String(e);
+        msg += " " + placeError;
+      }
     }
-    setStatus(msg, failures.length ? "error" : "ok");
+    setStatus(msg, failures.length || placeError ? "error" : "ok");
     refreshCredits();
   } catch (e) {
     setStatus(e.message || String(e), "error");
@@ -828,15 +1039,12 @@ function onModeButton(evt) {
 
 async function onRefFromClip() {
   try {
-    await referenceFromSelectedClip();
-    setStatus("Reference set from the selected clip.", "ok");
+    setStatus(state.presetPath ? "Rendering the selected range..." : "Cutting the selected range from the clip media...");
+    await referenceFromSelection();
+    setStatus("Reference set from the timeline: " + el.audioName.textContent, "ok");
   } catch (e) {
     setStatus(e.message || String(e), "error");
   }
-}
-
-async function onMaskFromInOut() {
-  try { await maskFromInOut(); } catch (e) { setStatus(e.message || String(e), "error"); }
 }
 
 async function onExtendToOut() {
@@ -878,8 +1086,8 @@ el.mode.addEventListener("change", onModeChange);
   for (let i = 0; i < buttons.length; i++) buttons[i].addEventListener("click", onModeButton);
 })();
 el.refFromClip.addEventListener("click", onRefFromClip);
-el.maskFromInOut.addEventListener("click", onMaskFromInOut);
 el.extendToOut.addEventListener("click", onExtendToOut);
+el.pickPreset.addEventListener("click", () => pickPreset().catch((e) => setStatus(e.message, "error")));
 el.pickAudio.addEventListener("click", () => pickReferenceAudio().catch((e) => setStatus(e.message, "error")));
 el.strength.addEventListener("input", () => (el.strengthValue.textContent = Number(el.strength.value).toFixed(2)));
 el.useSelection.addEventListener("click", onUseSelection);

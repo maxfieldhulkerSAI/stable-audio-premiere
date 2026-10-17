@@ -5,8 +5,8 @@ A Premiere Pro panel that generates music and sound design with the Stability AP
 ## What it does
 
 - Text to audio, audio to audio (restyle a reference), and inpaint (regenerate a section)
-- Reference audio from the selected timeline clip (reads its wav or mp3 media directly) or from a file
-- Inpaint mask from the sequence in/out set inside the selected clip; "Extend to out point" fills a gap after a clip
+- Reference audio is the in/out range you select on the timeline (rendered through Premiere's exporter with a WAV preset, or cut from the clip's WAV media), or a file
+- Inpaint uses the selected clip as context and your in/out as the section to regenerate; "Extend to out point" fills a gap after a clip
 - Duration from the sequence in/out range or the selected clip
 - 1 to 4 takes per run, each imported into a "Stable Audio" bin
 - One click places a take on a new audio track at the in point or playhead, as a single undo step
@@ -56,11 +56,22 @@ These are the calls most likely to need a fix on first run. Each is isolated in 
 
 ## Timeline reference (audio to audio and inpaint)
 
-**Selected clip** reads the selected track item's media path (`ClipProjectItem.getMediaFilePath`) and loads the file from disk, which is why the manifest asks for `localFileSystem: "fullAccess"`. Only wav and mp3 media can be sent; for anything else (AAC in an MP4, for example) export the clip as WAV first or use Choose file.
+The reference is the audio you select in Premiere, captured one of two ways:
 
-Mask math for inpaint: `mask = sequenceTime - clipStartOnTimeline + clipSourceInPoint`, so trimmed clips map correctly onto the source media. Extend sets the mask to start at the media's end (read from the WAV header) and grows Duration to the sequence out point.
+1. **With a WAV export preset set in Settings** (recommended): the panel sets the sequence in/out to the range it needs, calls `EncoderManager.exportSequence(..., ExportType.IMMEDIATELY, out, preset, false)`, restores your in/out, and reads the WAV back. You get exactly what you hear: mixes, effects, any media format. Make the preset once in File > Export > Media (Waveform Audio, Save Preset). Known Premiere issue: when the Work Area Bar is visible, the export uses the work area instead of in/out (Adobe bug DVAPR-4265965). Keep it hidden.
+2. **Without a preset**: the panel reads the selected clip's media file (`ClipProjectItem.getMediaFilePath`, needs `localFileSystem: "fullAccess"`) and cuts the range out of it at the sample level. PCM WAV media only, and the range must sit inside one clip.
 
-**Place at: Reference clip start** drops the result on a new track aligned with the clip it was made from, so an inpainted take lines up under the original for A/B.
+How each mode uses the range:
+
+- **Audio to audio**: in/out is the reference and the duration (6 s minimum). The result is placed at the in point.
+- **Inpaint**: select the clip and set in/out inside it. The whole clip (up to the model's max, centered on the selection when longer) is sent as context; in/out becomes `mask_start` / `mask_end` relative to that window. The result is placed at the window start so it lines up under the original.
+- **Extend to out point**: set the out point past the end of the selected clip. The tail of the clip is the context, the mask starts at its end, and Duration grows to the out point.
+
+**Place at: Reference range start** aligns the result with the range it came from. It is selected automatically after a timeline capture.
+
+## Placement
+
+`placeTake` tries, in order, overwrite on a new track, overwrite on the last track, then insert on the last track, and counts clips across audio tracks before and after each attempt so a silent no-op is reported as an error rather than a success. Auto-place is on by default.
 
 ## Visual style
 
