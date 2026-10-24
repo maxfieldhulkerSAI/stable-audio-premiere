@@ -50,7 +50,9 @@ Generated audio is written to the plugin's data folder (`plugin-data:/takes`), w
 
 ## Known risks (first-load checklist)
 
-These are the calls most likely to need a fix on first run. Each is isolated in `index.js` under the "Premiere" section.
+Verified by the self-test harness in Premiere 26 on 2026-10-23: timeline placement (overwrite on a new track, with the plain ProjectItem and Premiere's own TickTime), transactions, TickTime `.seconds`, bin creation, import lookup by name, selected clip times and media path, reading media from disk, binary writes, and WAV slicing. Still unverified in a real run: the export-preset capture path and the inpaint and extend window math.
+
+These were the calls most likely to need a fix on first run. Each is isolated in `index.js` under the "Premiere" section.
 
 | Area | What might break | Where to look |
 | --- | --- | --- |

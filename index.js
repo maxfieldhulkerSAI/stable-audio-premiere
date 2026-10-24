@@ -892,12 +892,13 @@ async function placeTake(take, target) {
   const before = await countAudioClips(sequence);
 
   const describe = (o) => (o && o.constructor ? o.constructor.name : typeof o);
+  // Verified in Premiere 26 (self-test, 2026-10-23): the plain ProjectItem from the bin works;
+  // the ClipProjectItem cast makes every SequenceEditor action fail with "Invalid parameter".
   const items = [{ label: "ProjectItem", value: take.projectItem }];
-  const cast = asClip(take.projectItem);
-  if (cast && cast !== take.projectItem) items.push({ label: "ClipProjectItem", value: cast });
   const times = [];
   if (tick) times.push({ label: "native TickTime", value: tick });
   times.push({ label: "createWithSeconds", value: ppro.TickTime.createWithSeconds(seconds) });
+  // "overwrite, new track" (audio index = track count) is the verified path and creates the track.
   const strategies = [
     { label: "overwrite, new track", run: (it, t) => editor.createOverwriteItemAction(it, t, 0, audioTracks) },
     { label: "overwrite, last track", run: (it, t) => editor.createOverwriteItemAction(it, t, 0, Math.max(0, audioTracks - 1)) },

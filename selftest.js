@@ -173,9 +173,21 @@
     r.playheadS = await placeTake(take, "playhead");
     r.viaPlayhead = state.lastPlacement;
     r.clipsAfterPlayhead = await countAudioClips(sequence);
+    // "Reference range start" has no native TickTime, so this exercises createWithSeconds.
+    const savedRef = state.referenceAudio;
+    const refStart = inS + take.duration + 1;
+    state.referenceAudio = { name: "selftest", arrayBuffer: null, clip: { startS: refStart, endS: refStart + 1 } };
+    try {
+      r.refStartS = await placeTake(take, "clip");
+      r.viaRef = state.lastPlacement;
+    } finally {
+      state.referenceAudio = savedRef;
+    }
+    r.clipsAfterRef = await countAudioClips(sequence);
     ctx.placed = { startS: r.placedAtS, endS: r.placedAtS + take.duration };
     if (before >= 0 && !(r.clipsAfterIn > before)) throw fail("No clip appeared after placing at the in point", r);
     if (Math.abs(r.placedAtS - inS) > 0.02) throw fail("Placed at " + r.placedAtS + " s, expected the in point " + inS, r);
+    if (r.clipsAfterRef >= 0 && !(r.clipsAfterRef > r.clipsAfterPlayhead)) throw fail("No clip appeared when placing at the reference range start", r);
     return r;
   }
 
