@@ -743,17 +743,24 @@ async function extendToOut() {
 }
 
 /** Where to place the cue, in seconds. */
-async function placementSeconds(target) {
+/** Returns { seconds, tick } where tick is Premiere's own TickTime when it supplied one. */
+async function placementTime(target) {
   const { sequence } = await activeProjectAndSequence();
   if (target === "clip" && state.referenceAudio && state.referenceAudio.clip && isFinite(state.referenceAudio.clip.startS)) {
-    return state.referenceAudio.clip.startS;
+    return { seconds: state.referenceAudio.clip.startS, tick: null };
   }
   if (target === "in" || target === "clip") {
-    const inS = tickSeconds(await sequence.getInPoint());
-    if (isFinite(inS) && inS >= 0 && inS < 60 * 60 * 24) return inS;
+    const tick = await sequence.getInPoint();
+    const inS = tickSeconds(tick);
+    if (isFinite(inS) && inS >= 0 && inS < 60 * 60 * 24) return { seconds: inS, tick };
   }
-  const pos = tickSeconds(await sequence.getPlayerPosition());
-  return isFinite(pos) ? pos : 0;
+  const tick = await sequence.getPlayerPosition();
+  const pos = tickSeconds(tick);
+  return { seconds: isFinite(pos) ? pos : 0, tick: isFinite(pos) ? tick : null };
+}
+
+async function placementSeconds(target) {
+  return (await placementTime(target)).seconds;
 }
 
 /** Items from getItems() are plain ProjectItems; folder methods need a FolderItem. */
@@ -810,7 +817,7 @@ async function importTake(project, nativePath, fileName) {
   const items = await bin.getItems();
   const item = items.find((i) => i.name === fileName || i.name === baseName);
   if (!item) throw new Error("Imported but could not find " + fileName + " in the bin.");
-  return asClip(item);
+  return item; // plain ProjectItem; SequenceEditor actions take ProjectItem, not the ClipProjectItem cast
 }
 
 /** Counts clips across all audio tracks, or -1 if the API is unavailable. */
@@ -856,42 +863,59 @@ function runAction(project, makeAction, undoLabel) {
  */
 async function placeTake(take, target) {
   const { project, sequence } = await activeProjectAndSequence();
-  const seconds = await placementSeconds(target);
-  const time = ppro.TickTime.createWithSeconds(seconds);
+  const { seconds, tick } = await placementTime(target);
   const editor = ppro.SequenceEditor.getEditor(sequence);
   const audioTracks = await sequence.getAudioTrackCount();
-  const item = asClip(take.projectItem);
   const before = await countAudioClips(sequence);
-  console.log("[StableAudio] placeTake: at " + seconds + " s, audio tracks " + audioTracks + ", clips before " + before +
-    ", item " + (item && item.constructor ? item.constructor.name : typeof item) + " " + (item && item.name));
 
-  const attempts = [
-    { label: "overwrite, new track", run: () => editor.createOverwriteItemAction(item, time, 0, audioTracks) },
-    { label: "overwrite, last track", run: () => editor.createOverwriteItemAction(item, time, 0, Math.max(0, audioTracks - 1)) },
-    { label: "insert, last track", run: () => editor.createInsertProjectItemAction(item, time, 0, Math.max(0, audioTracks - 1), true) },
+  const describe = (o) => (o && o.constructor ? o.constructor.name : typeof o);
+  const items = [{ label: "ProjectItem", value: take.projectItem }];
+  const cast = asClip(take.projectItem);
+  if (cast && cast !== take.projectItem) items.push({ label: "ClipProjectItem", value: cast });
+  const times = [];
+  if (tick) times.push({ label: "native TickTime", value: tick });
+  times.push({ label: "createWithSeconds", value: ppro.TickTime.createWithSeconds(seconds) });
+  const strategies = [
+    { label: "overwrite, new track", run: (it, t) => editor.createOverwriteItemAction(it, t, 0, audioTracks) },
+    { label: "overwrite, last track", run: (it, t) => editor.createOverwriteItemAction(it, t, 0, Math.max(0, audioTracks - 1)) },
+    { label: "insert, last track", run: (it, t) => editor.createInsertProjectItemAction(it, t, 0, Math.max(0, audioTracks - 1), true) },
   ];
+  console.log("[StableAudio] placeTake: at " + seconds + " s, audio tracks " + audioTracks + ", clips before " + before +
+    ", item " + describe(take.projectItem) + " \"" + (take.projectItem && take.projectItem.name) + "\"" +
+    ", tick " + describe(tick) + " " + JSON.stringify(tick && { seconds: tick.seconds, ticks: tick.ticks, ticksNumber: tick.ticksNumber }));
 
   const errors = [];
-  for (const attempt of attempts) {
-    try {
-      runAction(project, attempt.run, "Stable Audio: place " + take.name);
-    } catch (e) {
-      errors.push(attempt.label + ": " + (e.message || e));
-      continue;
+  for (const it of items) {
+    for (const t of times) {
+      for (const st of strategies) {
+        const label = st.label + " [" + it.label + ", " + t.label + "]";
+        try {
+          runAction(project, () => st.run(it.value, t.value), "Stable Audio: place " + take.name);
+        } catch (e) {
+          const msg = label + ": " + (e.message || e);
+          console.warn("[StableAudio] " + msg);
+          errors.push(msg);
+          continue;
+        }
+        if (before < 0) {
+          console.log("[StableAudio] placed via " + label + " (unverified: track item count unavailable)");
+          setStatus("Edit accepted via " + label + ", but the panel could not verify a clip appeared.", "ok");
+          return seconds;
+        }
+        const after = await countAudioClips(sequence);
+        if (after > before) {
+          console.log("[StableAudio] placed via " + label);
+          return seconds;
+        }
+        const msg = label + ": no clip appeared";
+        console.warn("[StableAudio] " + msg);
+        errors.push(msg);
+      }
     }
-    if (before < 0) {
-      console.log("[StableAudio] placed via " + attempt.label + " (unverified: track item count unavailable)");
-      setStatus("Edit accepted via " + attempt.label + ", but the panel could not verify a clip appeared.", "ok");
-      return seconds;
-    }
-    const after = await countAudioClips(sequence);
-    if (after > before) {
-      console.log("[StableAudio] placed via " + attempt.label);
-      return seconds;
-    }
-    errors.push(attempt.label + ": no clip appeared");
   }
-  throw new Error("Could not place the clip on the timeline. " + errors.join(" | "));
+  const distinct = Array.from(new Set(errors.map((e) => e.replace(/^.*?: /, ""))));
+  throw new Error("Could not place the clip on the timeline after " + errors.length + " attempts. Premiere said: " +
+    distinct.join(" | ") + ". See Debug in UXP Developer Tools for each attempt.");
 }
 
 /* ------------------------------------------------------------------ */
