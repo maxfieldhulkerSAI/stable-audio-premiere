@@ -146,12 +146,12 @@ function setBusy(busy) {
 
 /* Buttons are styled divs (see index.html), so disabled is a class, not a property. */
 function setDisabled(node, disabled) {
-  const base = node.className.replace(/\s*disabled/g, "");
+  const base = node.className.replace(/(^|\s)disabled(?=\s|$)/g, "");
   node.className = disabled ? base + " disabled" : base;
 }
 
 function isDisabled(node) {
-  return /disabled/.test(node.className);
+  return /(^|\s)disabled(\s|$)/.test(node.className);
 }
 
 function setSettingsOpen(open) {
