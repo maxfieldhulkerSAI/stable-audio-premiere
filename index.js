@@ -57,6 +57,20 @@ const CONFIG = {
     terms: "https://stability.ai/terms-of-use",
     credits: "https://platform.stability.ai/account/credits",
   },
+  // Sign-in broker. UXP panels cannot receive a browser redirect, so the panel
+  // asks this service for a session, opens its login page in the browser, and
+  // polls until a key is attached (Adobe's oauth-workflow-sample pattern).
+  // The stub is tools/stub-broker.js; the real one is a Stability-hosted https
+  // service with the same three endpoints (see MARKETPLACE.md). Its origin must
+  // be listed under requiredPermissions.network.domains in manifest.json.
+  broker: "http://127.0.0.1:8787",
+  signIn: {
+    pollIntervalMs: 2000,
+    timeoutMs: 3 * 60 * 1000,
+    // The broker forgets sessions after this; the "Open sign-in page" link
+    // reuses a session younger than this and starts a new one otherwise.
+    sessionTtlMs: 10 * 60 * 1000,
+  },
   // Premiere ticks per second (used only if TickTime.seconds is unavailable).
   ticksPerSecond: 254016000000,
 };
@@ -89,6 +103,10 @@ const el = {
   testMode: $("testMode"),
   synthetic: $("synthetic"),
   accountState: $("accountState"),
+  keyField: $("keyField"),
+  signIn: $("signIn"),
+  cancelSignIn: $("cancelSignIn"),
+  reopenSignIn: $("reopenSignIn"),
   getKey: $("getKey"),
   signOut: $("signOut"),
   privacyLink: $("privacyLink"),
@@ -133,6 +151,9 @@ const state = {
   takes: [], // { id, name, prompt, duration, nativePath, projectItem }
   busy: false,
   credits: null, // last balance from the API, or null when unknown
+  keySource: "key", // "account" when the key came from Sign in with Stability, "key" when pasted
+  login: null, // in-progress sign-in: { id, loginUrl, createdAt, deadline, cancelled, timer, wake }
+  lastLogin: null, // last broker session, so "Open sign-in page" can reopen it after a timeout
   testMode: false, // developer: selftest.js polls .selftest/request.json
   synthetic: false, // developer: generateOne returns a generated tone instead of calling the API
   lastPlacement: null, // label of the placement combination that last succeeded
@@ -186,6 +207,7 @@ async function loadSettings() {
     if (!raw) return;
     const s = JSON.parse(raw);
     if (s.apiKey) el.apiKey.value = s.apiKey;
+    state.keySource = s.apiKey && s.keySource === "account" ? "account" : "key";
     if (s.model) el.model.value = s.model;
     if (s.outputFormat) el.outputFormat.value = s.outputFormat;
     if (s.presetPath) setPreset(s.presetPath);
@@ -208,6 +230,7 @@ function applyDevToggles() {
 async function saveSettings() {
   const s = {
     apiKey: el.apiKey.value.trim(),
+    keySource: state.keySource,
     model: el.model.value,
     outputFormat: el.outputFormat.value,
     presetPath: state.presetPath,
@@ -227,11 +250,18 @@ async function saveSettings() {
 /** Clears the key from the field and from secure storage; other settings stay. */
 async function signOut() {
   if (isDisabled(el.signOut)) return;
+  const viaAccount = state.keySource === "account";
   el.apiKey.value = "";
   el.credits.textContent = "";
+  state.keySource = "key";
   try {
     await saveSettings();
-    setStatus("Signed out. The API key was removed from this machine.", "ok");
+    setStatus(
+      viaAccount
+        ? "Signed out of your Stability account. Nothing from it stays on this machine."
+        : "Signed out. The API key was removed from this machine.",
+      "ok"
+    );
   } catch (e) {
     setStatus("Could not remove the key: " + e.message, "error");
   }
@@ -239,16 +269,184 @@ async function signOut() {
 
 function updateAccountState() {
   const key = el.apiKey.value.trim();
-  el.accountState.textContent = key ? "Signed in (key ending " + key.slice(-4) + ")" : "Signed out";
+  const viaAccount = !!key && state.keySource === "account";
+  el.accountState.textContent = !key
+    ? "Signed out"
+    : viaAccount
+      ? "Signed in via Stability account"
+      : "Signed in (key ending " + key.slice(-4) + ")";
   setDisabled(el.signOut, !key);
+  // A key issued by the account flow is never shown; the paste field is the fallback.
+  el.keyField.className = viaAccount ? "field hidden" : "field";
+}
+
+/* ------------------------------------------------------------------ */
+/* Sign in with Stability                                              */
+/* ------------------------------------------------------------------ */
+
+function brokerFetch(path, init) {
+  return fetch(CONFIG.broker + path, init);
+}
+
+function formatCountdown(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+/** Sleeps, but wakes early when cancelSignIn() is called. */
+function loginSleep(login, ms) {
+  return new Promise((resolve) => {
+    login.wake = resolve;
+    login.timer = setTimeout(resolve, ms);
+  });
+}
+
+function showSignInButtons(mode) {
+  // mode: "idle" | "waiting" | "retry"
+  setDisabled(el.signIn, mode === "waiting");
+  el.signIn.textContent = mode === "waiting" ? "Waiting for the browser..." : "Sign in with Stability";
+  el.cancelSignIn.className = mode === "waiting" ? "btn ghost" : "btn ghost hidden";
+  el.reopenSignIn.className = mode === "retry" ? "btn ghost" : "btn ghost hidden";
+}
+
+function cancelSignIn() {
+  const login = state.login;
+  if (!login) return;
+  login.cancelled = true;
+  clearTimeout(login.timer);
+  if (login.wake) login.wake();
+}
+
+/** POST /session on the broker. Throws with a readable message when it is unreachable. */
+async function createLoginSession() {
+  let res;
+  try {
+    res = await brokerFetch("/session", { method: "POST", headers: { Accept: "application/json" } });
+  } catch (e) {
+    throw new Error("Could not reach the Stability sign-in service. Check your connection, or paste an API key instead.");
+  }
+  if (!res.ok) throw new Error("The sign-in service answered HTTP " + res.status + ". Try again later, or paste an API key.");
+  const data = await res.json();
+  if (!data || !data.id || !data.loginUrl) throw new Error("The sign-in service sent an unexpected reply. Paste an API key instead.");
+  return { id: String(data.id), loginUrl: String(data.loginUrl), createdAt: Date.now() };
+}
+
+/** Stores a key delivered by the broker through the normal settings path. */
+async function acceptAccountKey(apiKeyValue) {
+  el.apiKey.value = apiKeyValue;
+  state.keySource = "account";
+  await saveSettings(); // persists, updates the Account line, refreshes credits
+  onModelChange();
+  setSettingsOpen(false);
+  setStatus("Signed in with your Stability account.", "ok");
+}
+
+/**
+ * Sign in with Stability: create a broker session, open its login page in the
+ * system browser, and poll until the key arrives, the user cancels, or three
+ * minutes pass. The panel stays usable throughout; on timeout the
+ * "Open sign-in page" link reopens the browser and polls again.
+ */
+async function signInWithStability(reuse) {
+  if (state.login) return;
+  const login = { cancelled: false, timer: null, wake: null };
+  state.login = login;
+  showSignInButtons("waiting");
+  try {
+    const last = state.lastLogin;
+    const fresh = last && Date.now() - last.createdAt < CONFIG.signIn.sessionTtlMs - 15000;
+    let session;
+    if (reuse && fresh) {
+      session = last;
+    } else {
+      setStatus("Contacting the Stability sign-in service...");
+      session = await createLoginSession();
+    }
+    Object.assign(login, session);
+    state.lastLogin = session;
+
+    const opened = await openExternal(session.loginUrl);
+    if (login.cancelled) throw new Error("cancelled");
+    if (!opened) {
+      // UXP refused to launch the browser (user declined the launchProcess consent,
+      // or the scheme is missing from the manifest). Leave the link available.
+      state.login = null;
+      showSignInButtons("retry");
+      setStatus("Could not open the browser for sign-in. Allow Premiere to open links, then click Open sign-in page, or paste an API key.", "error");
+      return;
+    }
+
+    const deadline = Date.now() + CONFIG.signIn.timeoutMs;
+    let nextPoll = Date.now() + CONFIG.signIn.pollIntervalMs;
+    let unreachable = 0;
+    while (!login.cancelled && Date.now() < deadline) {
+      const left = formatCountdown(deadline - Date.now());
+      setStatus(
+        (unreachable ? "Sign-in service not responding, retrying. " : "Finish signing in in your browser. ") +
+          "Waiting " + left + ". Cancel is under Settings."
+      );
+      await loginSleep(login, 1000);
+      if (login.cancelled || Date.now() < nextPoll) continue;
+      nextPoll = Date.now() + CONFIG.signIn.pollIntervalMs;
+
+      let res;
+      try {
+        res = await brokerFetch("/session/" + encodeURIComponent(session.id), { headers: { Accept: "application/json" } });
+      } catch (e) {
+        unreachable++;
+        continue;
+      }
+      if (login.cancelled) break;
+      if (res.status === 404 || res.status === 410) {
+        state.lastLogin = null;
+        throw new Error("The sign-in link expired or was already used. Click Sign in with Stability to get a new one.");
+      }
+      if (!res.ok) {
+        unreachable++;
+        continue;
+      }
+      unreachable = 0;
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        continue;
+      }
+      if (data && data.status === "ready" && data.apiKey) {
+        state.lastLogin = null;
+        state.login = null;
+        showSignInButtons("idle");
+        await acceptAccountKey(String(data.apiKey));
+        return;
+      }
+    }
+    if (login.cancelled) throw new Error("cancelled");
+    // Timed out. Keep the session so the link can reopen it; the panel is fully usable meanwhile.
+    state.login = null;
+    showSignInButtons("retry");
+    setStatus("Login not completed. Click Open sign-in page under Settings to try again, or paste an API key.", "error");
+  } catch (e) {
+    state.login = null;
+    if (e && e.message === "cancelled") {
+      showSignInButtons(state.lastLogin ? "retry" : "idle");
+      setStatus("Sign-in cancelled. You can paste an API key under Settings instead.");
+    } else {
+      showSignInButtons("idle");
+      setStatus(e && e.message ? e.message : String(e), "error");
+    }
+  }
 }
 
 /** Opens a public page in the system browser (needs launchProcess in the manifest). */
 async function openExternal(url) {
   try {
     await uxp.shell.openExternal(url);
+    return true;
   } catch (e) {
     setStatus("Could not open the browser. Visit " + url, "error");
+    return false;
   }
 }
 
@@ -1241,7 +1439,13 @@ el.toggleSettings.addEventListener("click", toggleSettings);
 el.closeSettings.addEventListener("click", () => setSettingsOpen(false));
 el.testMode.addEventListener("change", () => { applyDevToggles(); saveSettings(); });
 el.synthetic.addEventListener("change", () => { applyDevToggles(); saveSettings(); });
-el.apiKey.addEventListener("input", updateAccountState);
+el.apiKey.addEventListener("input", () => {
+  state.keySource = "key"; // typing in the field makes it a pasted key
+  updateAccountState();
+});
+el.signIn.addEventListener("click", () => { if (!isDisabled(el.signIn)) signInWithStability(false); });
+el.reopenSignIn.addEventListener("click", () => signInWithStability(true));
+el.cancelSignIn.addEventListener("click", cancelSignIn);
 el.getKey.addEventListener("click", () => openExternal(CONFIG.links.getKey));
 el.signOut.addEventListener("click", signOut);
 el.credits.addEventListener("click", () => openExternal(CONFIG.links.credits));

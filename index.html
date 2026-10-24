@@ -133,11 +133,15 @@
 
     <div id="settings" class="card hidden">
       <div class="cardhead"><span class="capsule">Account</span><div class="meta"><span id="accountState" class="hint" style="margin-right: 8px;">Signed out</span><div id="closeSettings" class="btn ghost">Close</div></div></div>
-      <div class="field"><span class="k">API key</span><div class="v"><input id="apiKey" class="full" type="password" placeholder="sk-..." /></div></div>
+      <div class="field"><div class="v">
+        <div id="signIn" class="btn grow">Sign in with Stability</div>
+        <div id="cancelSignIn" class="btn ghost hidden">Cancel</div>
+        <div id="reopenSignIn" class="btn ghost hidden">Open sign-in page</div></div></div>
+      <div id="keyField" class="field"><span class="k">API key</span><div class="v"><input id="apiKey" class="full" type="password" placeholder="or paste a key: sk-..." /></div></div>
       <div class="field"><span class="k"></span><div class="v">
         <div id="getKey" class="btn ghost">Get a key</div>
         <div id="signOut" class="btn ghost">Sign out</div></div></div>
-      <span class="hint tight">The key is stored in Premiere's secure storage on this machine only. Generation uses Stability API credits.</span>
+      <span class="hint tight">Sign in opens your browser and finishes here by itself. The key is stored in Premiere's secure storage on this machine only. Generation uses Stability API credits.</span>
       <div class="field"><span class="k">Model</span><div class="v">
         <select id="model" class="full">
           <option value="stable-audio-3" selected>Stable Audio 3.0</option>

@@ -15,24 +15,49 @@
       "label": {
         "default": "Stable Audio"
       },
-      "minimumSize": { "width": 300, "height": 420 },
-      "preferredDockedSize": { "width": 360, "height": 640 },
-      "preferredFloatingSize": { "width": 380, "height": 640 },
-      "maximumSize": { "width": 600, "height": 2000 },
+      "minimumSize": {
+        "width": 300,
+        "height": 420
+      },
+      "preferredDockedSize": {
+        "width": 360,
+        "height": 640
+      },
+      "preferredFloatingSize": {
+        "width": 380,
+        "height": 640
+      },
+      "maximumSize": {
+        "width": 600,
+        "height": 2000
+      },
       "icons": [
         {
           "width": 23,
           "height": 23,
           "path": "icons/dark.png",
-          "scale": [1, 2],
-          "theme": ["darkest", "dark", "medium"]
+          "scale": [
+            1,
+            2
+          ],
+          "theme": [
+            "darkest",
+            "dark",
+            "medium"
+          ]
         },
         {
           "width": 23,
           "height": 23,
           "path": "icons/light.png",
-          "scale": [1, 2],
-          "theme": ["lightest", "light"]
+          "scale": [
+            1,
+            2
+          ],
+          "theme": [
+            "lightest",
+            "light"
+          ]
         }
       ]
     }
@@ -42,19 +67,35 @@
       "width": 48,
       "height": 48,
       "path": "icons/plugin-icon.png",
-      "scale": [1, 2],
-      "theme": ["darkest", "dark", "medium", "lightest", "light", "all"],
-      "species": ["pluginList"]
+      "scale": [
+        1,
+        2
+      ],
+      "theme": [
+        "darkest",
+        "dark",
+        "medium",
+        "lightest",
+        "light",
+        "all"
+      ],
+      "species": [
+        "pluginList"
+      ]
     }
   ],
   "requiredPermissions": {
     "network": {
       "domains": [
-        "https://api.stability.ai"
+        "https://api.stability.ai",
+        "http://127.0.0.1:8787"
       ]
     },
     "launchProcess": {
-      "schemes": ["https"]
+      "schemes": [
+        "https",
+        "http"
+      ]
     },
     "localFileSystem": "fullAccess",
     "clipboard": "readAndWrite"

@@ -11,8 +11,31 @@ A Premiere Pro panel that generates music and sound design with the Stability AP
 - 1 to 4 takes per run, each imported into a "Stable Audio" bin
 - One click places a take on a new audio track at the in point or playhead, as a single undo step
 - Seamless loop toggle (prompt-level for now)
-- API key stored in UXP secure storage, credit balance shown in the header
-- Settings has Get a key, Sign out (removes the key from this machine), and privacy and terms links; these open the system browser, which UXP asks the user to allow once
+- Sign in with Stability (browser sign-in through a broker service, see below) or paste an API key; either way the key lives in UXP secure storage and the credit balance shows in the header
+- Settings has Sign in with Stability, Get a key, Sign out (removes the key from this machine), and privacy and terms links; the browser-opening ones use the system browser, which UXP asks the user to allow once
+
+## Sign in with Stability
+
+A UXP panel cannot receive a browser redirect, so sign-in follows Adobe's `oauth-workflow-sample` pattern: the panel asks a broker service for a session, opens the broker's login page in the system browser, and polls the session until a key is attached.
+
+1. **Sign in with Stability** (Settings > Account) does `POST {broker}/session` and gets `{ id, loginUrl }`.
+2. The panel opens `loginUrl` with `uxp.shell.openExternal` and polls `GET {broker}/session/{id}` every 2 s. The status line counts down from 3:00; **Cancel** stops polling and leaves the panel as it was.
+3. When the user finishes in the browser, the poll returns `{ status: "ready", apiKey }`. The broker hands the key out once and forgets it. The panel stores it through the normal settings path (so Sign out and the balance work as before), collapses Settings, and refreshes credits. The Account line reads "Signed in via Stability account"; a pasted key reads "Signed in (key ending ...)". The key issued by sign-in is never shown.
+4. After 3 minutes without a result the panel shows "Login not completed" and an **Open sign-in page** link that reopens the same browser page and polls again (a new session is created if the broker's 10 minute session lifetime has passed). The paste-a-key field keeps working at every point.
+
+Stability does not host the broker yet. `tools/stub-broker.js` stands in for it during development, and `CONFIG.broker` in `index.js` points at it:
+
+```bash
+node tools/stub-broker.js
+```
+
+It listens on `http://127.0.0.1:8787`, serves a one-button login page that issues a fake `sk-stub-...` key, and expires sessions after 10 minutes. The fake key is rejected by `api.stability.ai`, so the header shows "Key rejected" after a stub sign-in; that is expected. Its test runs without Premiere:
+
+```bash
+node tools/stub-broker.test.js
+```
+
+Two manifest entries exist only for the stub and must go before packaging: `http://127.0.0.1:8787` under `requiredPermissions.network.domains` and `http` under `launchProcess.schemes` (UXP refuses to open a URL whose scheme is not listed). The real broker is an `https` origin, which also matters because macOS blocks plain `http` to anything but localhost. Switching to it is one line in `CONFIG.broker` plus the manifest domain. See `MARKETPLACE.md` for what the real service must expose.
 
 ## Self-test harness
 
@@ -39,7 +62,7 @@ Tests: `env` (project, sequence, tracks, in/out, selection), `import` (write a t
 2. Install **UXP Developer Tools** from the Creative Cloud desktop app (v2.2.1 or later).
 3. In UXP Developer Tools, turn on developer mode if asked, then **Add Plugin** and pick `manifest.json` in this folder.
 4. Click **Load**. The panel appears under **Window > UXP Plugins > Stable Audio**.
-5. Open **Settings** in the panel, paste a Stability API key, click **Save settings**.
+5. Open **Settings** in the panel and either click **Sign in with Stability** (with `node tools/stub-broker.js` running during development) or paste a Stability API key and click **Save**.
 6. Open a sequence, set in and out, type a prompt, click **Generate**.
 
 Use **Debug** in UXP Developer Tools to see console output. Every status message is also logged with a `[StableAudio]` prefix.
@@ -62,7 +85,8 @@ These were the calls most likely to need a fix on first run. Each is isolated in
 | Bin creation | `root.createBinAction(name, makeUnique)` is used. If it throws, takes land in the project root. | `stableAudioBin()` |
 | Selected clip duration | `getSelection().getTrackItems()[0].getDuration()`. Pre-26.x builds may differ. | `selectedClipDuration()` |
 | Import lookup | After `importFiles`, the item is found by name in the bin. If Premiere strips extensions differently, widen the match. | `importTake()` |
-| Network | Only `https://api.stability.ai` is allowed in the manifest. A `TypeError: Failed to fetch` means the domain list, not the key. | `manifest.json` |
+| Network | Only `https://api.stability.ai` and the sign-in broker origin are allowed in the manifest. A `TypeError: Failed to fetch` means the domain list, not the key. | `manifest.json` |
+| Sign in with Stability | `uxp.shell.openExternal` needs the URL's scheme under `launchProcess.schemes`, and the user must accept UXP's consent prompt the first time. If the browser never opens, the panel says so and leaves an Open sign-in page link. | `signInWithStability()` |
 | Selected clip as reference | `getSelection().getTrackItems()`, then `getStartTime` / `getInPoint` / `getProjectItem` on the track item and `getMediaFilePath` on the clip item. Each is wrapped; missing ones fall back or produce a clear message. | `selectedClipInfo()` |
 | Reading media from disk | `fs.getEntryWithUrl("file:///...")` needs `fullAccess`. If it throws, check the manifest permission and the path separators (Windows paths are converted). | `readFileBytes()` |
 | Binary writes | `file.write(arrayBuffer, { format: formats.binary })`. If the WAV is 0 bytes, check this call. | `writeTake()` |
@@ -107,6 +131,6 @@ UXP ignores `display: block`, `<details>`, and does not show a `<select>` value 
 
 - Extend as a first-class action (needs source-length detection and a replace-media step on the timeline)
 - Audition inside the panel (UXP has no `<audio>` playback; takes are auditioned in the Source monitor)
-- Account login and shared credits with the web app and DAW plugin (uses an API key instead)
+- A real sign-in broker (the plugin side is done against `tools/stub-broker.js`; which account signs in and whose credits are spent is still an open product decision)
 - Custom styles via Audio LoRA
 - Writing files next to the project
