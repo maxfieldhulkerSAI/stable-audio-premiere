@@ -834,8 +834,11 @@ async function countAudioClips(sequence) {
 /** Runs one placement action inside a transaction; errors thrown inside the callback are rethrown. */
 function runAction(project, makeAction, undoLabel) {
   let err = null;
+  let ok = false;
   project.lockedAccess(() => {
-    project.executeTransaction((compound) => {
+    // executeTransaction returns false when Premiere rejects the action without throwing
+    // (Adobe's premiere-api sample relies on this), so the boolean is the real result.
+    ok = project.executeTransaction((compound) => {
       try {
         compound.addAction(makeAction());
       } catch (e) {
@@ -844,6 +847,7 @@ function runAction(project, makeAction, undoLabel) {
     }, undoLabel);
   });
   if (err) throw err;
+  if (ok === false) throw new Error("Premiere rejected the edit (executeTransaction returned false)");
 }
 
 /**
@@ -858,6 +862,8 @@ async function placeTake(take, target) {
   const audioTracks = await sequence.getAudioTrackCount();
   const item = asClip(take.projectItem);
   const before = await countAudioClips(sequence);
+  console.log("[StableAudio] placeTake: at " + seconds + " s, audio tracks " + audioTracks + ", clips before " + before +
+    ", item " + (item && item.constructor ? item.constructor.name : typeof item) + " " + (item && item.name));
 
   const attempts = [
     { label: "overwrite, new track", run: () => editor.createOverwriteItemAction(item, time, 0, audioTracks) },
@@ -874,7 +880,8 @@ async function placeTake(take, target) {
       continue;
     }
     if (before < 0) {
-      console.log("[StableAudio] placed via " + attempt.label + " (unverified)");
+      console.log("[StableAudio] placed via " + attempt.label + " (unverified: track item count unavailable)");
+      setStatus("Edit accepted via " + attempt.label + ", but the panel could not verify a clip appeared.", "ok");
       return seconds;
     }
     const after = await countAudioClips(sequence);
