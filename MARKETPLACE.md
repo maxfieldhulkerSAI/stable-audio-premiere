@@ -41,6 +41,7 @@ Stages, as agreed: a private `.ccx` for internal testers first (no review), then
 - [ ] **Permissions review.** `localFileSystem: "fullAccess"` is only needed to read clip media when no export preset is set (`sliceFromClipMedia`). Decide: keep it and justify in reviewer notes, or drop that fallback and use `"request"` plus a folder picker for takes. Adobe warns users may refuse full access at install.
 - [ ] **Bundle an export preset** or make the no-preset path obviously correct. Reviewers will not create a `.epr` first. Shipping a Waveform Audio preset inside the plugin and selecting it by default removes the setup step.
 - [ ] **No developer output in production.** The `[StableAudio]` console lines are fine; make sure no debug UI or alert is left on.
+- [ ] **Package from a clean checkout.** `.selftest/` is gitignored and must not be in the `.ccx`: without its `DEV` marker the Developer toggles stay hidden and `selftest.js` does nothing. Run `python tools/selftest.py --disable` or clone fresh before packaging.
 - [ ] **Pricing field.** Free. Say in the description that generation is billed by Stability, not through Adobe.
 
 ### Submission

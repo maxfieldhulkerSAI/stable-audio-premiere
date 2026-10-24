@@ -85,6 +85,9 @@ const el = {
   outputFormat: $("outputFormat"),
   saveSettings: $("saveSettings"),
   closeSettings: $("closeSettings"),
+  devBlock: $("devBlock"),
+  testMode: $("testMode"),
+  synthetic: $("synthetic"),
   accountState: $("accountState"),
   getKey: $("getKey"),
   signOut: $("signOut"),
@@ -130,6 +133,9 @@ const state = {
   takes: [], // { id, name, prompt, duration, nativePath, projectItem }
   busy: false,
   credits: null, // last balance from the API, or null when unknown
+  testMode: false, // developer: selftest.js polls .selftest/request.json
+  synthetic: false, // developer: generateOne returns a generated tone instead of calling the API
+  lastPlacement: null, // label of the placement combination that last succeeded
 };
 
 function setStatus(message, kind) {
@@ -183,9 +189,20 @@ async function loadSettings() {
     if (s.model) el.model.value = s.model;
     if (s.outputFormat) el.outputFormat.value = s.outputFormat;
     if (s.presetPath) setPreset(s.presetPath);
+    el.testMode.checked = !!s.testMode;
+    el.synthetic.checked = !!s.synthetic;
+    applyDevToggles();
   } catch (e) {
     console.warn("Could not load settings", e);
   }
+}
+
+/** Developer toggles only take effect when selftest.js found the .selftest/DEV marker. */
+function applyDevToggles() {
+  const dev = el.devBlock.className.indexOf("hidden") < 0;
+  state.testMode = dev && el.testMode.checked;
+  state.synthetic = dev && el.synthetic.checked;
+  if (window.SelfTest) window.SelfTest.setEnabled(state.testMode);
 }
 
 async function saveSettings() {
@@ -194,6 +211,8 @@ async function saveSettings() {
     model: el.model.value,
     outputFormat: el.outputFormat.value,
     presetPath: state.presetPath,
+    testMode: el.testMode.checked,
+    synthetic: el.synthetic.checked,
   };
   try {
     await secureStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
@@ -358,6 +377,7 @@ async function pollResult(id, onTick) {
 
 /** Calls the API once and returns the audio as an ArrayBuffer. */
 async function generateOne(opts, onTick) {
+  if (state.synthetic && window.SelfTest) return window.SelfTest.synth(opts, onTick);
   const fam = CONFIG.families[opts.model];
   const path = fam.base + "/" + opts.mode; // text-to-audio | audio-to-audio | inpaint
   const res = await fetch(CONFIG.apiBase + path, {
@@ -473,12 +493,15 @@ async function selectedClipDuration() {
  * The first selected clip on the timeline, with its media path and timing.
  * Returns { trackItem, projectItem, mediaPath, name, startS, endS, sourceInS, durationS }.
  */
-async function selectedClipInfo() {
-  const { sequence } = await activeProjectAndSequence();
-  const selection = await sequence.getSelection();
-  const items = await selection.getTrackItems();
-  if (!items || !items.length) throw new Error("Select a clip on the timeline first.");
-  const trackItem = items[0];
+async function selectedClipInfo(trackItemOverride) {
+  let trackItem = trackItemOverride || null;
+  if (!trackItem) {
+    const { sequence } = await activeProjectAndSequence();
+    const selection = await sequence.getSelection();
+    const items = await selection.getTrackItems();
+    if (!items || !items.length) throw new Error("Select a clip on the timeline first.");
+    trackItem = items[0];
+  }
 
   const read = async (fn) => {
     try { return tickSeconds(await trackItem[fn]()); } catch (e) { return NaN; }
@@ -593,20 +616,20 @@ function sliceWav(buf, startS, endS) {
  * Preferred: render through Premiere's exporter with the user's WAV preset (hears exactly the mix).
  * Fallback: cut the range out of the selected clip's WAV media.
  */
-async function captureRange(startS, endS, label) {
+async function captureRange(startS, endS, label, clipInfo) {
   if (state.presetPath) {
     try {
       return await exportRange(startS, endS, label);
     } catch (e) {
       console.warn("Export path failed, trying media slice", e);
       try {
-        return await sliceFromClipMedia(startS, endS, label);
+        return await sliceFromClipMedia(startS, endS, label, clipInfo);
       } catch (e2) {
         throw new Error("Export failed (" + e.message + ") and the clip media could not be cut (" + e2.message + ").");
       }
     }
   }
-  return sliceFromClipMedia(startS, endS, label);
+  return sliceFromClipMedia(startS, endS, label, clipInfo);
 }
 
 async function setSequenceInOut(project, sequence, startS, endS) {
@@ -654,8 +677,8 @@ async function exportRange(startS, endS, label) {
   return { name: file.name, arrayBuffer: bytes };
 }
 
-async function sliceFromClipMedia(startS, endS, label) {
-  const info = await selectedClipInfo();
+async function sliceFromClipMedia(startS, endS, label, clipInfo) {
+  const info = clipInfo || (await selectedClipInfo());
   if (!info.mediaPath) throw new Error("Could not read the media path of the selected clip.");
   const ext = (info.mediaPath.split(".").pop() || "").toLowerCase();
   if (ext !== "wav") {
@@ -897,6 +920,7 @@ async function placeTake(take, target) {
           errors.push(msg);
           continue;
         }
+        state.lastPlacement = label;
         if (before < 0) {
           console.log("[StableAudio] placed via " + label + " (unverified: track item count unavailable)");
           setStatus("Edit accepted via " + label + ", but the panel could not verify a clip appeared.", "ok");
@@ -1061,7 +1085,7 @@ async function onGenerate() {
   const fullPrompt = loop ? prompt + ", seamless loop, loopable, consistent start and end" : prompt;
 
   const cost = count * fam.creditsPerTake;
-  if (state.credits !== null && state.credits < cost) {
+  if (!state.synthetic && state.credits !== null && state.credits < cost) {
     return setStatus(
       "This run needs " + cost + " credits and the balance is " + formatCredits(state.credits) + ". Click the balance to buy credits.",
       "error"
@@ -1070,8 +1094,8 @@ async function onGenerate() {
 
   setBusy(true);
   try {
-    apiKey();
-    const label = "Generating " + count + " take" + (count > 1 ? "s" : "") + " of " + duration + " s";
+    if (!state.synthetic) apiKey();
+    const label = (state.synthetic ? "Synthesizing " : "Generating ") + count + " take" + (count > 1 ? "s" : "") + " of " + duration + " s";
     setStatus(label + "...");
 
     const requests = [];
@@ -1214,6 +1238,8 @@ el.saveSettings.addEventListener("click", async () => {
 });
 el.toggleSettings.addEventListener("click", toggleSettings);
 el.closeSettings.addEventListener("click", () => setSettingsOpen(false));
+el.testMode.addEventListener("change", () => { applyDevToggles(); saveSettings(); });
+el.synthetic.addEventListener("change", () => { applyDevToggles(); saveSettings(); });
 el.apiKey.addEventListener("input", updateAccountState);
 el.getKey.addEventListener("click", () => openExternal(CONFIG.links.getKey));
 el.signOut.addEventListener("click", signOut);
@@ -1248,4 +1274,5 @@ loadSettings().then(() => {
   updateCost();
   renderTakes();
   refreshCredits();
+  if (window.SelfTest) window.SelfTest.onReady();
 });

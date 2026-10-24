@@ -154,6 +154,14 @@
         <span id="presetName" class="hint">None</span></div></div>
       <span class="hint tight">A Waveform Audio export preset lets the panel render the exact in/out mix. Make one in File &gt; Export &gt; Media. Keep the Work Area Bar hidden.</span>
       <div class="field"><span class="k"></span><div class="v"><div id="saveSettings" class="btn">Save</div></div></div>
+      <div id="devBlock" class="stack hidden">
+        <div class="divider"></div>
+        <div class="field"><span class="k">Developer</span><div class="v">
+          <input id="testMode" type="checkbox" /><span>Test mode</span>
+          <input id="synthetic" type="checkbox" style="margin-left: 12px;" /><span>Synthetic audio</span>
+        </div></div>
+        <span class="hint tight">Test mode polls .selftest/request.json in the plugin folder. Synthetic audio replaces the API with a generated tone, no credits.</span>
+      </div>
       <div class="divider"></div>
       <div class="field" style="min-height: 24px; margin-bottom: 0;"><span class="k">Legal</span><div class="v">
         <div id="privacyLink" class="btn ghost">Privacy policy</div>
@@ -248,5 +256,6 @@
   </div>
 
   <script src="index.js"></script>
+  <script src="selftest.js"></script>
 </body>
 </html>
