@@ -61,24 +61,26 @@
     input[type="checkbox"] { height: auto; margin: 0 5px 0 0; }
     input[type="range"] { height: 24px; padding: 0; border: none; background-color: transparent; }
 
-    button {
+    .btn {
+      display: flex; flex-direction: row; align-items: center; justify-content: center;
+      box-sizing: border-box; white-space: nowrap; flex-shrink: 0;
       height: 30px; padding: 0 12px; border-radius: 6px;
       border: 1px solid rgba(255,255,255,0.12);
       background-color: #262626; color: #EEEEEE; font-size: 14px; font-weight: 400;
       letter-spacing: 0; text-align: center;
     }
-    button.ghost { background-color: transparent; border-color: transparent; color: #B6A9C6; padding: 0 6px; }
-    button.primary {
+    .btn.ghost { background-color: transparent; border-color: transparent; color: #B6A9C6; padding: 0 6px; }
+    .btn.primary {
       height: 38px; margin-top: 6px; margin-bottom: 10px;
       background-color: #A381FF; border-color: #A381FF; color: #1A0F36; font-weight: 600;
     }
-    button:disabled { opacity: 0.45; }
+    .btn.disabled { opacity: 0.45; pointer-events: none; }
 
     /* mode switch */
     .seg { display: flex; flex-direction: row; align-items: stretch; margin-bottom: 10px; }
-    .seg button { flex: 1; margin-right: 4px; padding: 0 6px; color: #B6A9C6; }
-    .seg button:last-child { margin-right: 0; }
-    .seg button.active { border-color: #A381FF; color: #EEEEEE; background-color: #262626; }
+    .seg .btn { flex: 1; margin-right: 4px; padding: 0 6px; color: #B6A9C6; }
+    .seg .btn:last-child { margin-right: 0; }
+    .seg .btn.active { border-color: #A381FF; color: #EEEEEE; background-color: #262626; }
 
     /* cards */
     .card {
@@ -87,7 +89,7 @@
       background-color: #262626; border: 1px solid rgba(255,255,255,0.08);
     }
     .card .field > .k { width: 76px; }
-    .card input, .card select, .card button { background-color: #1E1E1E; }
+    .card input, .card select, .card .btn { background-color: #1E1E1E; }
     .card .hint.tight { margin-left: 76px; }
     .cardhead { display: flex; flex-direction: row; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .capsule {
@@ -113,8 +115,8 @@
     .take .name { font-weight: 700; color: #EEEEEE; margin-bottom: 1px; }
     .take .meta2 { color: #888888; font-size: 14px; margin-bottom: 6px; }
     .take .inline { display: flex; flex-direction: row; align-items: center; }
-    .take .inline > button { margin-right: 4px; height: 26px; padding: 0 9px; }
-    .take .inline > button:last-child { margin-right: 0; }
+    .take .inline > .btn { margin-right: 4px; height: 26px; padding: 0 9px; }
+    .take .inline > .btn:last-child { margin-right: 0; }
   </style>
 </head>
 <body>
@@ -123,16 +125,16 @@
       <div class="wordmark"><span class="a">Stable</span><span class="b">Audio</span></div>
       <div class="meta">
         <span id="credits" class="credits"></span>
-        <button id="toggleSettings" class="ghost">Settings</button>
+        <div id="toggleSettings" class="btn ghost">Settings</div>
       </div>
     </div>
 
     <div id="settings" class="card hidden">
-      <div class="cardhead"><span class="capsule">Account</span><span id="accountState" class="hint">Signed out</span></div>
+      <div class="cardhead"><span class="capsule">Account</span><div class="meta"><span id="accountState" class="hint" style="margin-right: 8px;">Signed out</span><div id="closeSettings" class="btn ghost">Close</div></div></div>
       <div class="field"><span class="k">API key</span><div class="v"><input id="apiKey" class="full" type="password" placeholder="sk-..." /></div></div>
       <div class="field"><span class="k"></span><div class="v">
-        <button id="getKey" class="ghost">Get a key</button>
-        <button id="signOut" class="ghost">Sign out</button></div></div>
+        <div id="getKey" class="btn ghost">Get a key</div>
+        <div id="signOut" class="btn ghost">Sign out</div></div></div>
       <span class="hint tight">The key is stored in Premiere's secure storage on this machine only. Generation uses Stability API credits.</span>
       <div class="field"><span class="k">Model</span><div class="v">
         <select id="model" class="full">
@@ -146,21 +148,21 @@
           <option value="mp3">MP3</option>
         </select></div></div>
       <div class="field"><span class="k">Preset</span><div class="v">
-        <button id="pickPreset">Choose .epr</button>
+        <div id="pickPreset" class="btn">Choose .epr</div>
         <span id="presetName" class="hint">None</span></div></div>
       <span class="hint tight">A Waveform Audio export preset lets the panel render the exact in/out mix. Make one in File &gt; Export &gt; Media. Keep the Work Area Bar hidden.</span>
-      <div class="field"><span class="k"></span><div class="v"><button id="saveSettings">Save</button></div></div>
+      <div class="field"><span class="k"></span><div class="v"><div id="saveSettings" class="btn">Save</div></div></div>
       <div class="divider"></div>
       <div class="field" style="min-height: 24px; margin-bottom: 0;"><span class="k">Legal</span><div class="v">
-        <button id="privacyLink" class="ghost">Privacy policy</button>
-        <button id="termsLink" class="ghost">Terms of use</button>
+        <div id="privacyLink" class="btn ghost">Privacy policy</div>
+        <div id="termsLink" class="btn ghost">Terms of use</div>
         <span id="versionLabel" class="hint right"></span></div></div>
     </div>
 
     <div id="modeSeg" class="seg">
-      <button data-mode="text-to-audio" class="active">Text</button>
-      <button data-mode="audio-to-audio">Restyle</button>
-      <button data-mode="inpaint">Inpaint</button>
+      <div data-mode="text-to-audio" class="btn active">Text</div>
+      <div data-mode="audio-to-audio" class="btn">Restyle</div>
+      <div data-mode="inpaint" class="btn">Inpaint</div>
     </div>
     <select id="mode" class="hidden">
       <option value="text-to-audio" selected>Text to audio</option>
@@ -174,8 +176,8 @@
       <div class="cardhead">
         <span class="capsule">Reference</span>
         <div class="meta">
-          <button id="refFromClip">Use selected range</button>
-          <button id="pickAudio" class="ghost">File</button>
+          <div id="refFromClip" class="btn">Use selected range</div>
+          <div id="pickAudio" class="btn ghost">File</div>
         </div>
       </div>
       <span id="audioName" class="hint" style="margin-bottom: 8px;">Set in and out, select the clip, then Use selected range.</span>
@@ -191,7 +193,7 @@
             <span class="hint">to</span>
             <input id="maskEnd" class="num" type="number" min="0" step="0.1" value="20" />
             <span class="hint">s</span>
-            <button id="extendToOut" class="right">Extend</button>
+            <div id="extendToOut" class="btn right">Extend</div>
           </div>
         </div>
       </div>
@@ -202,8 +204,8 @@
       <div class="v">
         <input id="duration" class="num" type="number" min="1" max="380" step="1" value="30" />
         <span class="hint">s</span>
-        <button id="useSelection">In/out</button>
-        <button id="useClip">Clip</button>
+        <div id="useSelection" class="btn">In/out</div>
+        <div id="useClip" class="btn">Clip</div>
         <span id="durationHint" class="hint right">max 380</span>
       </div>
     </div>
@@ -232,7 +234,7 @@
       </div>
     </div>
 
-    <button id="generate" class="primary">Generate &rarr;</button>
+    <div id="generate" class="btn primary">Generate &rarr;</div>
 
     <div id="status" class="status">Ready.</div>
 

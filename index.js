@@ -84,6 +84,7 @@ const el = {
   model: $("model"),
   outputFormat: $("outputFormat"),
   saveSettings: $("saveSettings"),
+  closeSettings: $("closeSettings"),
   accountState: $("accountState"),
   getKey: $("getKey"),
   signOut: $("signOut"),
@@ -139,8 +140,23 @@ function setStatus(message, kind) {
 
 function setBusy(busy) {
   state.busy = busy;
-  el.generate.disabled = busy;
+  setDisabled(el.generate, busy);
   el.generate.textContent = busy ? "Generating..." : "Generate →";
+}
+
+/* Buttons are styled divs (see index.html), so disabled is a class, not a property. */
+function setDisabled(node, disabled) {
+  const base = node.className.replace(/\s*disabled/g, "");
+  node.className = disabled ? base + " disabled" : base;
+}
+
+function isDisabled(node) {
+  return /disabled/.test(node.className);
+}
+
+function setSettingsOpen(open) {
+  el.settings.className = open ? "card" : "card hidden";
+  el.toggleSettings.textContent = open ? "Close" : "Settings";
 }
 
 /* ------------------------------------------------------------------ */
@@ -191,6 +207,7 @@ async function saveSettings() {
 
 /** Clears the key from the field and from secure storage; other settings stay. */
 async function signOut() {
+  if (isDisabled(el.signOut)) return;
   el.apiKey.value = "";
   el.credits.textContent = "";
   try {
@@ -204,7 +221,7 @@ async function signOut() {
 function updateAccountState() {
   const key = el.apiKey.value.trim();
   el.accountState.textContent = key ? "Signed in (key ending " + key.slice(-4) + ")" : "Signed out";
-  el.signOut.disabled = !key;
+  setDisabled(el.signOut, !key);
 }
 
 /** Opens a public page in the system browser (needs launchProcess in the manifest). */
@@ -901,18 +918,18 @@ function renderTakes() {
       const row = document.createElement("div");
       row.className = "inline";
 
-      const placeIn = document.createElement("button");
-      placeIn.className = "small";
+      const placeIn = document.createElement("div");
+      placeIn.className = "btn small";
       placeIn.textContent = "In point";
       placeIn.onclick = () => onPlace(take, "in");
 
-      const placeHead = document.createElement("button");
-      placeHead.className = "small";
+      const placeHead = document.createElement("div");
+      placeHead.className = "btn small";
       placeHead.textContent = "Playhead";
       placeHead.onclick = () => onPlace(take, "playhead");
 
-      const reveal = document.createElement("button");
-      reveal.className = "small";
+      const reveal = document.createElement("div");
+      reveal.className = "btn small";
       reveal.textContent = "Path";
       reveal.onclick = () => {
         try {
@@ -1110,9 +1127,9 @@ function onModeChange() {
   el.a2aBlock.className = needsAudio ? "card" : "card hidden";
   el.strengthBlock.className = mode === "audio-to-audio" ? "field" : "field hidden";
   el.maskBlock.className = mode === "inpaint" ? "stack" : "stack hidden";
-  const buttons = el.modeSeg.querySelectorAll("button");
+  const buttons = el.modeSeg.querySelectorAll(".btn");
   for (let i = 0; i < buttons.length; i++) {
-    buttons[i].className = buttons[i].getAttribute("data-mode") === mode ? "active" : "";
+    buttons[i].className = buttons[i].getAttribute("data-mode") === mode ? "btn active" : "btn";
   }
 }
 
@@ -1151,19 +1168,21 @@ function onModelChange() {
 }
 
 function toggleSettings() {
-  const open = el.settings.className.indexOf("hidden") >= 0;
-  el.settings.className = open ? "card" : "card hidden";
+  setSettingsOpen(el.settings.className.indexOf("hidden") >= 0);
 }
 
 /* ------------------------------------------------------------------ */
 /* Wire up                                                             */
 /* ------------------------------------------------------------------ */
 
-el.saveSettings.addEventListener("click", () => {
-  saveSettings();
+el.saveSettings.addEventListener("click", async () => {
+  await saveSettings();
   onModelChange();
+  // Collapse once a key is in place so the panel fits at its minimum size.
+  if (el.apiKey.value.trim()) setSettingsOpen(false);
 });
 el.toggleSettings.addEventListener("click", toggleSettings);
+el.closeSettings.addEventListener("click", () => setSettingsOpen(false));
 el.apiKey.addEventListener("input", updateAccountState);
 el.getKey.addEventListener("click", () => openExternal(CONFIG.links.getKey));
 el.signOut.addEventListener("click", signOut);
@@ -1174,7 +1193,7 @@ el.model.addEventListener("change", onModelChange);
 el.takes.addEventListener("change", updateCost);
 el.mode.addEventListener("change", onModeChange);
 (function wireModeButtons() {
-  const buttons = el.modeSeg.querySelectorAll("button");
+  const buttons = el.modeSeg.querySelectorAll(".btn");
   for (let i = 0; i < buttons.length; i++) buttons[i].addEventListener("click", onModeButton);
 })();
 el.refFromClip.addEventListener("click", onRefFromClip);
@@ -1188,7 +1207,7 @@ el.generate.addEventListener("click", onGenerate);
 
 loadSettings().then(() => {
   // Open Settings on first run so the key field is visible.
-  if (!el.apiKey.value) el.settings.className = "card";
+  setSettingsOpen(!el.apiKey.value);
   updateAccountState();
   try {
     const v = (uxp.versions && uxp.versions.plugin) ? String(uxp.versions.plugin) : "";
