@@ -128,8 +128,12 @@
     </div>
 
     <div id="settings" class="card hidden">
-      <div class="cardhead"><span class="capsule">Account</span></div>
+      <div class="cardhead"><span class="capsule">Account</span><span id="accountState" class="hint">Signed out</span></div>
       <div class="field"><span class="k">API key</span><div class="v"><input id="apiKey" class="full" type="password" placeholder="sk-..." /></div></div>
+      <div class="field"><span class="k"></span><div class="v">
+        <button id="getKey" class="ghost">Get a key</button>
+        <button id="signOut" class="ghost">Sign out</button></div></div>
+      <span class="hint tight">The key is stored in Premiere's secure storage on this machine only. Generation uses Stability API credits.</span>
       <div class="field"><span class="k">Model</span><div class="v">
         <select id="model" class="full">
           <option value="stable-audio-3" selected>Stable Audio 3.0</option>
@@ -146,6 +150,11 @@
         <span id="presetName" class="hint">None</span></div></div>
       <span class="hint tight">A Waveform Audio export preset lets the panel render the exact in/out mix. Make one in File &gt; Export &gt; Media. Keep the Work Area Bar hidden.</span>
       <div class="field"><span class="k"></span><div class="v"><button id="saveSettings">Save</button></div></div>
+      <div class="divider"></div>
+      <div class="field" style="min-height: 24px; margin-bottom: 0;"><span class="k">Legal</span><div class="v">
+        <button id="privacyLink" class="ghost">Privacy policy</button>
+        <button id="termsLink" class="ghost">Terms of use</button>
+        <span id="versionLabel" class="hint right"></span></div></div>
     </div>
 
     <div id="modeSeg" class="seg">

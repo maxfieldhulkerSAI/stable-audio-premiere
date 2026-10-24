@@ -49,6 +49,13 @@ const CONFIG = {
   pollIntervalMs: 3000,
   pollTimeoutMs: 5 * 60 * 1000,
   binName: "Stable Audio",
+  // Public pages opened in the system browser. Marketplace review requires working
+  // privacy and terms links and a way to sign up; confirm these URLs before submitting.
+  links: {
+    getKey: "https://platform.stability.ai/account/keys",
+    privacy: "https://stability.ai/privacy-policy",
+    terms: "https://stability.ai/terms-of-use",
+  },
   // Premiere ticks per second (used only if TickTime.seconds is unavailable).
   ticksPerSecond: 254016000000,
 };
@@ -76,6 +83,12 @@ const el = {
   model: $("model"),
   outputFormat: $("outputFormat"),
   saveSettings: $("saveSettings"),
+  accountState: $("accountState"),
+  getKey: $("getKey"),
+  signOut: $("signOut"),
+  privacyLink: $("privacyLink"),
+  termsLink: $("termsLink"),
+  versionLabel: $("versionLabel"),
   settings: $("settings"),
   toggleSettings: $("toggleSettings"),
   strengthBlock: $("strengthBlock"),
@@ -167,15 +180,43 @@ async function saveSettings() {
   try {
     await secureStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
     setStatus("Settings saved.", "ok");
+    updateAccountState();
     refreshCredits();
   } catch (e) {
     setStatus("Could not save settings: " + e.message, "error");
   }
 }
 
+/** Clears the key from the field and from secure storage; other settings stay. */
+async function signOut() {
+  el.apiKey.value = "";
+  el.credits.textContent = "";
+  try {
+    await saveSettings();
+    setStatus("Signed out. The API key was removed from this machine.", "ok");
+  } catch (e) {
+    setStatus("Could not remove the key: " + e.message, "error");
+  }
+}
+
+function updateAccountState() {
+  const key = el.apiKey.value.trim();
+  el.accountState.textContent = key ? "Signed in (key ending " + key.slice(-4) + ")" : "Signed out";
+  el.signOut.disabled = !key;
+}
+
+/** Opens a public page in the system browser (needs launchProcess in the manifest). */
+async function openExternal(url) {
+  try {
+    await uxp.shell.openExternal(url);
+  } catch (e) {
+    setStatus("Could not open the browser. Visit " + url, "error");
+  }
+}
+
 function apiKey() {
   const key = el.apiKey.value.trim();
-  if (!key) throw new Error("Add your Stability API key under Settings.");
+  if (!key) throw new Error("Add your Stability API key under Settings, or click Get a key.");
   return key;
 }
 
@@ -1078,6 +1119,11 @@ el.saveSettings.addEventListener("click", () => {
   onModelChange();
 });
 el.toggleSettings.addEventListener("click", toggleSettings);
+el.apiKey.addEventListener("input", updateAccountState);
+el.getKey.addEventListener("click", () => openExternal(CONFIG.links.getKey));
+el.signOut.addEventListener("click", signOut);
+el.privacyLink.addEventListener("click", () => openExternal(CONFIG.links.privacy));
+el.termsLink.addEventListener("click", () => openExternal(CONFIG.links.terms));
 el.model.addEventListener("change", onModelChange);
 el.takes.addEventListener("change", updateCost);
 el.mode.addEventListener("change", onModeChange);
@@ -1097,6 +1143,11 @@ el.generate.addEventListener("click", onGenerate);
 loadSettings().then(() => {
   // Open Settings on first run so the key field is visible.
   if (!el.apiKey.value) el.settings.className = "card";
+  updateAccountState();
+  try {
+    const v = (uxp.versions && uxp.versions.plugin) ? String(uxp.versions.plugin) : "";
+    el.versionLabel.textContent = v ? "v" + v : "";
+  } catch (e) { /* older runtimes */ }
   onModeChange();
   updateCost();
   renderTakes();
