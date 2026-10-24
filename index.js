@@ -55,6 +55,7 @@ const CONFIG = {
     getKey: "https://platform.stability.ai/account/keys",
     privacy: "https://stability.ai/privacy-policy",
     terms: "https://stability.ai/terms-of-use",
+    credits: "https://platform.stability.ai/account/credits",
   },
   // Premiere ticks per second (used only if TickTime.seconds is unavailable).
   ticksPerSecond: 254016000000,
@@ -127,6 +128,7 @@ const state = {
   referenceAudio: null, // { name, arrayBuffer, clip? }  clip = { startS, endS } of the reference window on the timeline
   takes: [], // { id, name, prompt, duration, nativePath, projectItem }
   busy: false,
+  credits: null, // last balance from the API, or null when unknown
 };
 
 function setStatus(message, kind) {
@@ -236,18 +238,53 @@ async function pickPreset() {
 /* Stability API                                                       */
 /* ------------------------------------------------------------------ */
 
+function formatCredits(n) {
+  return (Number.isInteger(n) ? String(n) : n.toFixed(1)) + " credits";
+}
+
+/**
+ * Reads the balance and always leaves the header in a known state:
+ * a number (including 0), a short reason the API refused, or blank with no key.
+ */
 async function refreshCredits() {
+  let key;
+  try {
+    key = apiKey();
+  } catch (e) {
+    state.credits = null;
+    el.credits.textContent = "";
+    return;
+  }
   try {
     const res = await fetch(CONFIG.apiBase + CONFIG.balancePath, {
-      headers: { Authorization: "Bearer " + apiKey() },
+      headers: { Authorization: "Bearer " + key },
     });
-    if (!res.ok) return;
-    const data = await res.json();
-    if (typeof data.credits === "number") {
-      el.credits.textContent = data.credits.toFixed(1) + " credits";
+    if (res.status === 401 || res.status === 403) {
+      state.credits = null;
+      el.credits.textContent = "Key rejected";
+      setStatus("The API rejected this key. Check it under Settings or click Get a key.", "error");
+      return;
     }
+    if (!res.ok) {
+      state.credits = null;
+      el.credits.textContent = "Balance unavailable";
+      console.warn("[StableAudio] balance HTTP " + res.status);
+      return;
+    }
+    const data = await res.json();
+    const n = Number(data.credits);
+    if (!isFinite(n)) {
+      state.credits = null;
+      el.credits.textContent = "Balance unavailable";
+      return;
+    }
+    state.credits = n;
+    el.credits.textContent = formatCredits(n);
+    if (n <= 0) setStatus("No credits left. Click the balance to buy credits.", "error");
   } catch (e) {
-    /* no key yet, ignore */
+    state.credits = null;
+    el.credits.textContent = "Offline";
+    console.warn("[StableAudio] balance", e);
   }
 }
 
@@ -975,6 +1012,14 @@ async function onGenerate() {
   const outputFormat = el.outputFormat.value;
   const fullPrompt = loop ? prompt + ", seamless loop, loopable, consistent start and end" : prompt;
 
+  const cost = count * fam.creditsPerTake;
+  if (state.credits !== null && state.credits < cost) {
+    return setStatus(
+      "This run needs " + cost + " credits and the balance is " + formatCredits(state.credits) + ". Click the balance to buy credits.",
+      "error"
+    );
+  }
+
   setBusy(true);
   try {
     apiKey();
@@ -1042,11 +1087,11 @@ async function onGenerate() {
       }
     }
     setStatus(msg, failures.length || placeError ? "error" : "ok");
-    refreshCredits();
   } catch (e) {
     setStatus(e.message || String(e), "error");
   } finally {
     setBusy(false);
+    refreshCredits();
   }
 }
 
@@ -1122,6 +1167,7 @@ el.toggleSettings.addEventListener("click", toggleSettings);
 el.apiKey.addEventListener("input", updateAccountState);
 el.getKey.addEventListener("click", () => openExternal(CONFIG.links.getKey));
 el.signOut.addEventListener("click", signOut);
+el.credits.addEventListener("click", () => openExternal(CONFIG.links.credits));
 el.privacyLink.addEventListener("click", () => openExternal(CONFIG.links.privacy));
 el.termsLink.addEventListener("click", () => openExternal(CONFIG.links.terms));
 el.model.addEventListener("change", onModelChange);
