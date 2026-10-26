@@ -67,6 +67,9 @@ const CONFIG = {
   signIn: {
     pollIntervalMs: 2000,
     timeoutMs: 3 * 60 * 1000,
+    // A single broker request that takes longer than this is treated as failed,
+    // so a hung fetch (blocked origin, half-open socket) never freezes the flow.
+    requestTimeoutMs: 10 * 1000,
     // The broker forgets sessions after this; the "Open sign-in page" link
     // reuses a session younger than this and starts a new one otherwise.
     sessionTtlMs: 10 * 60 * 1000,
@@ -284,8 +287,32 @@ function updateAccountState() {
 /* Sign in with Stability                                              */
 /* ------------------------------------------------------------------ */
 
-function brokerFetch(path, init) {
-  return fetch(CONFIG.broker + path, init);
+/**
+ * fetch against the broker that gives up after requestTimeoutMs and that
+ * cancelSignIn() can abandon. Rejects with Error("timeout") or Error("cancelled").
+ */
+function brokerFetch(login, path, init) {
+  const url = CONFIG.broker + path;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (login && login.abort === abort) login.abort = null;
+      fn(value);
+    };
+    const abort = () => finish(reject, new Error("cancelled"));
+    const timer = setTimeout(() => finish(reject, new Error("timeout")), CONFIG.signIn.requestTimeoutMs);
+    if (login) login.abort = abort;
+    let p;
+    try {
+      p = fetch(url, init);
+    } catch (e) {
+      return finish(reject, e); // UXP throws synchronously for a disallowed origin
+    }
+    p.then((res) => finish(resolve, res), (e) => finish(reject, e));
+  });
 }
 
 function formatCountdown(ms) {
@@ -316,16 +343,22 @@ function cancelSignIn() {
   if (!login) return;
   login.cancelled = true;
   clearTimeout(login.timer);
+  if (login.abort) login.abort();
   if (login.wake) login.wake();
 }
 
 /** POST /session on the broker. Throws with a readable message when it is unreachable. */
-async function createLoginSession() {
+async function createLoginSession(login) {
   let res;
   try {
-    res = await brokerFetch("/session", { method: "POST", headers: { Accept: "application/json" } });
+    res = await brokerFetch(login, "/session", { method: "POST", headers: { Accept: "application/json" } });
   } catch (e) {
-    throw new Error("Could not reach the Stability sign-in service. Check your connection, or paste an API key instead.");
+    if (e && e.message === "cancelled") throw e;
+    console.warn("[StableAudio] sign-in: POST " + CONFIG.broker + "/session failed:", e && e.message ? e.message : e);
+    if (e && e.message === "timeout") {
+      throw new Error("The Stability sign-in service did not answer within " + Math.round(CONFIG.signIn.requestTimeoutMs / 1000) + " s. Try again, or paste an API key.");
+    }
+    throw new Error("Could not reach the Stability sign-in service at " + CONFIG.broker + ". Check your connection, or paste an API key instead.");
   }
   if (!res.ok) throw new Error("The sign-in service answered HTTP " + res.status + ". Try again later, or paste an API key.");
   const data = await res.json();
@@ -351,9 +384,10 @@ async function acceptAccountKey(apiKeyValue) {
  */
 async function signInWithStability(reuse) {
   if (state.login) return;
-  const login = { cancelled: false, timer: null, wake: null };
+  const login = { cancelled: false, timer: null, wake: null, abort: null };
   state.login = login;
   showSignInButtons("waiting");
+  console.log("[StableAudio] sign-in: broker " + CONFIG.broker + (reuse ? " (reopen)" : ""));
   try {
     const last = state.lastLogin;
     const fresh = last && Date.now() - last.createdAt < CONFIG.signIn.sessionTtlMs - 15000;
@@ -362,8 +396,9 @@ async function signInWithStability(reuse) {
       session = last;
     } else {
       setStatus("Contacting the Stability sign-in service...");
-      session = await createLoginSession();
+      session = await createLoginSession(login);
     }
+    if (login.cancelled) throw new Error("cancelled");
     Object.assign(login, session);
     state.lastLogin = session;
 
@@ -393,9 +428,11 @@ async function signInWithStability(reuse) {
 
       let res;
       try {
-        res = await brokerFetch("/session/" + encodeURIComponent(session.id), { headers: { Accept: "application/json" } });
+        res = await brokerFetch(login, "/session/" + encodeURIComponent(session.id), { headers: { Accept: "application/json" } });
       } catch (e) {
+        if (login.cancelled) break;
         unreachable++;
+        console.warn("[StableAudio] sign-in: poll failed:", e && e.message ? e.message : e);
         continue;
       }
       if (login.cancelled) break;
@@ -434,6 +471,7 @@ async function signInWithStability(reuse) {
       setStatus("Sign-in cancelled. You can paste an API key under Settings instead.");
     } else {
       showSignInButtons("idle");
+      console.warn("[StableAudio] sign-in failed:", e);
       setStatus(e && e.message ? e.message : String(e), "error");
     }
   }

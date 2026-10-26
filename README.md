@@ -29,7 +29,7 @@ Stability does not host the broker yet. `tools/stub-broker.js` stands in for it 
 node tools/stub-broker.js
 ```
 
-It listens on `http://127.0.0.1:8787`, serves a one-button login page that issues a fake `sk-stub-...` key, and expires sessions after 10 minutes. The fake key is rejected by `api.stability.ai`, so the header shows "Key rejected" after a stub sign-in; that is expected. Its test runs without Premiere:
+It listens on `http://127.0.0.1:8787`, serves a one-button login page that issues a fake `sk-stub-...` key, and expires sessions after 10 minutes. The manifest change that allows this origin only takes effect after UXP Developer Tools reloads the plugin (Reload, or Remove and Add Plugin again if Reload keeps the old permissions). Every step logs a `[StableAudio] sign-in:` line in the Debug console, and a broker request that takes more than 10 s fails with a visible message instead of hanging. The fake key is rejected by `api.stability.ai`, so the header shows "Key rejected" after a stub sign-in; that is expected. Its test runs without Premiere:
 
 ```bash
 node tools/stub-broker.test.js
