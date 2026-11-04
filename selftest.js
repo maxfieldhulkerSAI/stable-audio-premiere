@@ -7,7 +7,7 @@
  * polls .selftest/request.json every 2 s and, for each new request id, runs the
  * named tests inside Premiere and writes .selftest/results.json.
  *
- * Request:  { "id": "...", "tests": ["env", "import", "place", "capture"],
+ * Request:  { "id": "...", "tests": ["env", "import", "place", "capture", "cleanup"],
  *             "options": { "seconds": 5, "inS": 1, "captureSeconds": 2, "stopOnFail": true } }
  * Results:  { "id", "status": "running" | "done", "startedAt", "finishedAt", "env",
  *             "tests": [{ "name", "ok", "ms", "details", "error" }], "log": [...] }
@@ -250,11 +250,72 @@
     return r;
   }
 
+  /** Track items on audio tracks whose name marks them as harness output. */
+  async function findHarnessItems(sequence) {
+    const found = [];
+    const n = await sequence.getAudioTrackCount();
+    for (let i = 0; i < n; i++) {
+      const track = await sequence.getAudioTrack(i);
+      let items;
+      try { items = await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false); } catch (e) { items = await track.getTrackItems(); }
+      for (const ti of items || []) {
+        let name = null;
+        try { name = await ti.getName(); } catch (e) { /* fall through */ }
+        if (!name) {
+          try { const pi = await ti.getProjectItem(); name = pi && pi.name; } catch (e) { /* ignore */ }
+        }
+        if (name && name.indexOf("SA_") === 0 && name.indexOf("_selftest-tone_") > 0) found.push({ trackItem: ti, trackIndex: i, name });
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Removes every clip the harness placed (names SA_*_selftest-tone_*), as one undo step.
+   * Sequence has no track-removal API, so the audio tracks the place test created stay, empty.
+   */
+  async function testCleanup(ctx, options) {
+    const { project, sequence } = await activeProjectAndSequence();
+    const before = await countAudioClips(sequence);
+    const hits = await findHarnessItems(sequence);
+    const r = { clipsBefore: before, harnessClipsFound: hits.length, tracks: await sequence.getAudioTrackCount() };
+    if (!hits.length) {
+      r.clipsAfter = before;
+      return r;
+    }
+    const editor = ppro.SequenceEditor.getEditor(sequence);
+    let err = null;
+    let built = false;
+    // The selection is only valid inside the callback and must not cross an await.
+    const created = ppro.TrackItemSelection.createEmptySelection((sel) => {
+      try {
+        let added = 0;
+        for (const h of hits) if (sel.addItem(h.trackItem, false)) added++;
+        r.addedToSelection = added;
+        built = true;
+        runAction(project, () => editor.createRemoveItemsAction(sel, false, ppro.Constants.MediaType.AUDIO, false), "Stable Audio: self-test cleanup");
+      } catch (e) {
+        err = e;
+      }
+    });
+    r.createEmptySelection = created;
+    if (err) throw fail("Remove failed: " + String((err && err.message) || err), r);
+    if (!built) throw fail("createEmptySelection never ran its callback", r);
+    r.clipsAfter = await countAudioClips(sequence);
+    r.removed = before >= 0 && r.clipsAfter >= 0 ? before - r.clipsAfter : null;
+    if (r.removed !== null && r.removed < hits.length) throw fail("Removed " + r.removed + " of " + hits.length + " harness clips", r);
+    const left = await findHarnessItems(sequence);
+    r.harnessClipsLeft = left.length;
+    if (left.length) throw fail(left.length + " harness clips still on the timeline", r);
+    return r;
+  }
+
   const TESTS = {
     env: async (ctx) => (ctx.env = await envInfo()),
     import: testImport,
     place: testPlace,
     capture: testCapture,
+    cleanup: testCleanup,
   };
 
   /* ---- runner ------------------------------------------------------ */

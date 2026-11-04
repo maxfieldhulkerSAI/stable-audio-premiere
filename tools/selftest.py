@@ -4,6 +4,7 @@
     python tools/selftest.py                     run import, place, capture
     python tools/selftest.py env                 describe the open project and sequence
     python tools/selftest.py place capture --in-point 3 --capture-seconds 2
+    python tools/selftest.py cleanup             remove every clip the harness placed (tracks stay)
     python tools/selftest.py --disable           remove the marker (do this before packaging)
 
 Premiere must be open with a sequence, the plugin loaded, and Test mode on in Settings.
@@ -59,7 +60,7 @@ def report(r):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("tests", nargs="*", help="env, import, place, capture (default: import place capture)")
+    ap.add_argument("tests", nargs="*", help="env, import, place, capture, cleanup (default: import place capture)")
     ap.add_argument("--enable", action="store_true")
     ap.add_argument("--disable", action="store_true")
     ap.add_argument("--timeout", type=float, default=180, help="seconds to wait for results")

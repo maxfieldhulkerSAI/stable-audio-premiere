@@ -1,8 +1,25 @@
-# Stable Audio for Premiere Pro (UXP prototype)
+# Stable Audio for Premiere Pro
 
-A Premiere Pro panel that generates music and sound design with the Stability API and places the result on the timeline.
+A Premiere Pro panel that generates music and sound design with Stable Audio 3 and places the result on your timeline.
+
+![Stable Audio for Premiere Pro panel](docs/screenshot.png)
+
+## Try it
+
+This is a UXP plugin, so there is no hosted demo; it runs inside Premiere Pro. Loading it takes about five minutes.
+
+1. Premiere Pro 25.6 or later.
+2. Install **UXP Developer Tools** from the Creative Cloud desktop app (v2.2.1 or later).
+3. In UXP Developer Tools, turn on developer mode if asked, then **Add Plugin** and pick `manifest.json` in this folder.
+4. Click **Load**. The panel appears under **Window > UXP Plugins > Stable Audio**.
+5. Open **Settings** in the panel and paste a Stability API key (get one at https://platform.stability.ai/account/keys), then click **Save**. The key goes into UXP secure storage on your machine and is sent only to `api.stability.ai`.
+6. Open a sequence, set in and out, type a prompt, click **Generate**.
+
+Use **Debug** in UXP Developer Tools to see console output. Every status message is also logged with a `[StableAudio]` prefix. The **Sign in with Stability** button needs a broker service that is not hosted yet; see the sign-in section below for the local stub.
 
 ## What it does
+
+Pick a mode (Text, Restyle, Inpaint), type a prompt, set the length from the sequence in/out or the selected clip, and generate one to four takes. Each take is imported into a "Stable Audio" bin and, with Auto on, placed on a new audio track at the in point or playhead as a single undo step. Restyle and Inpaint use the audio you select on the timeline as the reference: the panel renders the in/out range through Premiere's exporter (or cuts it straight from the clip's WAV) and sends it to the API. The header shows your credit balance and the cost of the run before you click.
 
 - Text to audio, audio to audio (restyle a reference), and inpaint (regenerate a section)
 - Reference audio is the in/out range you select on the timeline (rendered through Premiere's exporter with a WAV preset, or cut from the clip's WAV media), or a file
@@ -13,6 +30,40 @@ A Premiere Pro panel that generates music and sound design with the Stability AP
 - Seamless loop toggle (prompt-level for now)
 - Sign in with Stability (browser sign-in through a broker service, see below) or paste an API key; either way the key lives in UXP secure storage and the credit balance shows in the header
 - Settings has Sign in with Stability, Get a key, Sign out (removes the key from this machine), and privacy and terms links; the browser-opening ones use the system browser, which UXP asks the user to allow once
+
+## How it was built
+
+Plain HTML, CSS and JavaScript in Adobe's UXP runtime, no framework and no build step; `index.html` is the panel, `index.js` is everything else (about 1,500 lines). Premiere's UXP API does the timeline work: `EncoderManager.exportSequence` to capture the reference range, `importFiles` into a bin, `createOverwriteItemAction` inside `executeTransaction` to place a take, all wrapped so a failing call reports what broke instead of hanging. Generated audio is written to the plugin's data folder with binary file writes. The Stability key lives in `uxp.storage.secureStorage`. A self-test harness (`selftest.js`) runs the Premiere-side calls from a request file so the integration can be checked without clicking and without spending credits. Styling follows the Stability brand tokens within what UXP can render. MIT licensed.
+
+## How it uses Stable Audio
+
+All three endpoints are async: the POST returns 202 with an `id`, and the panel polls `GET /v2beta/audio/results/{id}` every 3 s until it gets 200 with the audio bytes.
+
+- **Text to Audio** (`POST /v2beta/audio/stable-audio/text-to-audio`): the Text mode. Prompt, `duration` from the timeline (up to 380 s), `output_format` wav or mp3, a random `seed` per take so takes differ, optional loop phrasing in the prompt.
+- **Audio to Audio** (`POST /v2beta/audio/stable-audio/audio-to-audio`): the Restyle mode. The selected timeline range is sent as `audio` (6 to 380 s) with the prompt and `strength` (0.7 default; 0 keeps the input, 1 ignores it).
+- **Inpaint** (`POST /v2beta/audio/stable-audio/inpaint`): the Inpaint mode and "Extend to out point". The selected clip is sent as `audio` for context, and in/out becomes `mask_start` / `mask_end`; extend puts the mask at the end of the clip and grows `duration` to the out point.
+- **Balance** (`GET /v1/user/balance`): the credit figure in the header, refreshed after every run.
+
+Model: `stable-audio-3` (default). Stable Audio 2.5 and 2.0 remain selectable in Settings and use the `/v2beta/audio/stable-audio-2/` path with a `model` field; they answer inline and cap at 190 s.
+
+## Project structure
+
+| Path | Role |
+| --- | --- |
+| `manifest.json` | UXP manifest: panel sizes, icons, `api.stability.ai` network permission, `fullAccess` file system. |
+| `index.html` | The panel markup and all CSS. |
+| `index.js` | Settings and secure storage, the Stability client (`CONFIG` and the "API" section), the Premiere integration (the "Premiere" section: capture, import, placement), takes list, sign-in flow. |
+| `selftest.js` | In-panel test runner, inert unless `.selftest/DEV` exists and Test mode is on. |
+| `tools/selftest.py` | Drives the self-test harness from a terminal and prints a report. |
+| `tools/stub-broker.js`, `tools/stub-broker.test.js` | Local stand-in for the sign-in broker, and its test. |
+| `tools/set-plugin-id.js`, `tools/make_icons.py` | Marketplace prep: switch the plugin ID, regenerate the icon set. |
+| `icons/` | Panel and Marketplace icons. |
+| `MARKETPLACE.md` | Checklist for packaging a `.ccx` and listing on the Creative Cloud Marketplace. |
+| `docs/screenshot.png` | The image at the top of this README. |
+
+## License
+
+MIT, see [LICENSE](LICENSE).
 
 ## Sign in with Stability
 
@@ -55,17 +106,6 @@ Tests: `env` (project, sequence, tracks, in/out, selection), `import` (write a t
 ## Marketplace
 
 `MARKETPLACE.md` is the checklist for packaging a `.ccx` and listing the plugin on the Creative Cloud Marketplace. Icons are generated by `python tools/make_icons.py`; the plugin ID is switched with `node tools/set-plugin-id.js`.
-
-## Load it in Premiere (developer mode)
-
-1. Premiere Pro 25.6 or later.
-2. Install **UXP Developer Tools** from the Creative Cloud desktop app (v2.2.1 or later).
-3. In UXP Developer Tools, turn on developer mode if asked, then **Add Plugin** and pick `manifest.json` in this folder.
-4. Click **Load**. The panel appears under **Window > UXP Plugins > Stable Audio**.
-5. Open **Settings** in the panel and either click **Sign in with Stability** (with `node tools/stub-broker.js` running during development) or paste a Stability API key and click **Save**.
-6. Open a sequence, set in and out, type a prompt, click **Generate**.
-
-Use **Debug** in UXP Developer Tools to see console output. Every status message is also logged with a `[StableAudio]` prefix.
 
 ## Where files go
 
